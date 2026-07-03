@@ -6,4 +6,5 @@ riderModule.iml
 /_ReSharper.Caches/
 .idea/
 _work*/
-tests/results/
+tests/results/*
+!tests/results/SUMMARY.md
