@@ -1,0 +1,28 @@
+{
+  "env": {
+    "ENABLE_CLAUDEAI_MCP_SERVERS": "false"
+  },
+  "permissions": {
+    "deny": [
+      "WebSearch",
+      "WebFetch",
+      "NotebookEdit"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NonInteractive -File \"E:\\project\\IDLE_RPG\\scripts\\auto-commit.ps1\"",
+            "shell": "powershell",
+            "timeout": 120,
+            "statusMessage": "변경사항 자동 커밋 중...",
+            "asyncRewake": true
+          }
+        ]
+      }
+    ]
+  }
+}
