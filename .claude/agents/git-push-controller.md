@@ -1,3 +1,8 @@
+---
+name: git-push-controller
+description: "커밋 메시지를 받아 git commit/push를 안전하게 수행하는 최종 실행자. 원격 유무·hook·브랜치 권한·충돌을 처리하며 파괴적 명령은 절대 쓰지 않는다."
+---
+
 # git-push-controller
 
 ## 핵심 역할

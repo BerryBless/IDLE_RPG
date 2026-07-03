@@ -1,3 +1,8 @@
+---
+name: git-security-auditor
+description: "git status/diff 전체를 스캔해 민감 정보(.env, API 키, 토큰 등) 유출을 원천 차단하는 보안 게이트키퍼. PASS/FAIL 판정만 담당하며 FAIL 시 파이프라인을 즉시 중단한다."
+---
+
 # git-security-auditor
 
 ## 핵심 역할

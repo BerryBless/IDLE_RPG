@@ -48,14 +48,14 @@ BASE=$(git merge-base HEAD main 2>/dev/null || git merge-base HEAD master 2>/dev
 git diff $BASE HEAD
 ```
 
-**케이스 B — 경로 지정 (예: `/comprehensive-review src/Api/`):**
+**케이스 B — 경로 지정 (예: `/code-review-orchestrator src/Api/`):**
 ```bash
 # 특정 파일 또는 디렉토리의 현재 상태
 cat <path>  # 단일 파일
 # 또는 디렉토리 내 .cs 파일들을 순차 읽기
 ```
 
-**케이스 C — PR 번호 (예: `/comprehensive-review 42`):**
+**케이스 C — PR 번호 (예: `/code-review-orchestrator 42`):**
 ```bash
 gh pr diff 42
 ```

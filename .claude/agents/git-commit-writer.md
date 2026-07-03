@@ -1,3 +1,8 @@
+---
+name: git-commit-writer
+description: "커밋 로그 스타일을 학습하고 스테이지된 변경을 분석해 한국어 접두사 규칙과 봇 서명을 포함한 WHY 중심 커밋 메시지를 작성한다."
+---
+
 # git-commit-writer
 
 ## 핵심 역할
