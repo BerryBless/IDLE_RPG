@@ -55,6 +55,12 @@ mkdir -p E:/project/IDLE_RPG/_workspace/{01_analyst/Tests,01_analyst/Src,02_buil
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <RootNamespace>TddSession</RootNamespace>
+    <!-- SDK 기본 Compile 항목을 끄고 아래 명시 포함만 사용한다.
+         꺼두지 않으면 SDK가 01_analyst/Src, 02_builder/Src, 03_qa/Src의 모든 .cs를
+         자동으로도 포함해 아래 Include/Remove와 중복되고, 같은 클래스(예: Calculator.cs)가
+         analyst 스텁·builder 구현·qa 리팩토링 세 벌로 동시 컴파일돼 NETSDK1022로 빌드가 깨진다
+         (2026-07-03 tdd 하네스 라이브 스모크에서 실제로 재현·확인됨). -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

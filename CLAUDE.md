@@ -180,3 +180,4 @@ private readonly SemaphoreSlim _sendGate = new SemaphoreSlim(1, 1);
 | 날짜 | 변경 내용 | 대상 | 사유 |
 |------|----------|------|------|
 | 2026-07-03 | 초기 구성 | 전체 | ClaudeCodeStudy 하네스 이식 |
+| 2026-07-03 | TddSession.csproj 템플릿에 EnableDefaultCompileItems=false 추가 | skills/tdd-orchestrator/SKILL.md | 라이브 스모크에서 NETSDK1022(Compile 중복 항목) 빌드 실패 재현·확인 |
