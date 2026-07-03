@@ -144,7 +144,7 @@ agent = Agent(
     
     1. _workspace/02_commit_message.txt 에서 커밋 메시지 읽기
     2. git remote -v 로 원격 저장소 확인
-    3. 현재 브랜치 확인 및 보호 브랜치 여부 체크
+    3. 현재 브랜치 확인, master/main이면 claude 브랜치로 자동 전환(git-push-controller.md 로직 참조) 후 진행
     4. git commit -m "$(cat _workspace/02_commit_message.txt)" 실행
     5. pre-commit hook 실패 시 조건부 amend 처리
     6. git push (원격 있으면), 원격 없으면 로컬 커밋만
