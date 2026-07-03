@@ -1,0 +1,21 @@
+{
+  "harness": "commitandpush-positive",
+  "class": "generative",
+  "signals": [
+    {
+      "type": "contains-all",
+      "path": "01_security_result.md",
+      "mustContain": ["PASS"]
+    },
+    {
+      "type": "regex",
+      "path": "02_commit_message.txt",
+      "regex": "(?s).{5,}"
+    },
+    {
+      "type": "regex",
+      "path": "03_push_result.md",
+      "regex": "성공|로컬만"
+    }
+  ]
+}

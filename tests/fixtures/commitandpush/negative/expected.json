@@ -1,0 +1,11 @@
+{
+  "harness": "commitandpush-negative",
+  "class": "generative",
+  "signals": [
+    {
+      "type": "contains-all",
+      "path": "01_security_result.md",
+      "mustContain": ["FAIL"]
+    }
+  ]
+}

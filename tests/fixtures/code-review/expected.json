@@ -1,0 +1,21 @@
+{
+  "harness": "code-review",
+  "class": "analysis",
+  "artifacts": {
+    "sec": { "path": "02_security_findings.json", "arrayKey": "findings", "severityField": "severity" },
+    "arch": { "path": "02_architecture_findings.json", "arrayKey": "findings", "severityField": "severity" },
+    "perf": { "path": "02_performance_findings.json", "arrayKey": "findings", "severityField": "severity" },
+    "style": { "path": "02_style_findings.json", "arrayKey": "findings", "severityField": "severity" }
+  },
+  "expected_defects": [
+    { "id": "CR1", "artifact": "sec", "match": "cwe", "cwe": "CWE-89", "lineHint": 23, "minSeverity": "high", "note": "SQL string concatenation" },
+    { "id": "CR2", "artifact": "sec", "match": "cwe", "cwe": "CWE-798", "lineHint": 14, "minSeverity": "high", "note": "hardcoded API key" },
+    { "id": "CR3", "artifact": "sec", "match": "keyword", "keywords": ["MD5", "weak"], "lineHint": 31, "note": "weak crypto algorithm" },
+    { "id": "CR4", "artifact": "arch", "match": "keyword", "keywords": ["SRP", "단일 책임", "single responsibility", "god class", "갓 클래스"], "note": "SRP violation — god class" },
+    { "id": "CR5", "artifact": "arch", "match": "keyword", "keywords": ["DIP", "의존성 역전", "concrete", "구체"], "lineHint": 18, "note": "DIP violation — concrete new instead of abstraction" },
+    { "id": "CR6", "artifact": "perf", "match": "keyword", "keywords": ["N+1", "루프", "loop", "query", "쿼리"], "lineHint": 41, "note": "N+1 query in loop" },
+    { "id": "CR7", "artifact": "perf", "match": "keyword", "keywords": [".Result", "blocking", "블로킹", "동기"], "lineHint": 49, "note": "sync blocking on async" },
+    { "id": "CR8", "artifact": "style", "match": "keyword", "keywords": ["naming", "네이밍", "camelCase", "PascalCase", "컨벤션"], "lineHint": 54, "note": "naming convention violation" },
+    { "id": "CR9", "artifact": "style", "match": "keyword", "keywords": ["catch", "swallow", "삼킴", "빈"], "lineHint": 63, "note": "empty catch block" }
+  ]
+}

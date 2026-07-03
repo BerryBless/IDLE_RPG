@@ -1,0 +1,16 @@
+{
+  "harness": "tdd",
+  "class": "generative",
+  "signals": [
+    {
+      "type": "regex",
+      "path": "03_qa/test_results.txt",
+      "regex": "Failed:\\s*0"
+    },
+    {
+      "type": "regex",
+      "path": "04_evolution/evolution_report.md",
+      "regex": "(?s).{50,}"
+    }
+  ]
+}

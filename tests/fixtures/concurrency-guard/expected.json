@@ -1,0 +1,38 @@
+{
+  "harness": "concurrency-guard",
+  "class": "analysis",
+  "artifacts": {
+    "lockfree": {
+      "path": "02_lockfree_findings.json",
+      "arrayKey": "findings",
+      "categoryField": "verdict",
+      "severityField": "severity"
+    },
+    "lockjust": {
+      "path": "02_lockjustification_findings.json",
+      "arrayKey": "findings",
+      "categoryField": "comment_quality",
+      "severityField": "severity"
+    },
+    "deadlock": {
+      "path": "03_deadlock_analysis.json",
+      "arrayKey": "findings",
+      "categoryField": "pattern",
+      "severityField": "risk_level"
+    }
+  },
+  "review": {
+    "path": "03_deadlock_review.json",
+    "scoreField": "final_score"
+  },
+  "expected_defects": [
+    { "id": "CC1", "artifact": "lockfree", "match": "category", "category": "replaceable", "lineHint": 29, "note": "lock + _counter++ replaceable by Interlocked" },
+    { "id": "CC2", "artifact": "lockjust", "match": "category", "category": "missing", "lineHint": 36, "minSeverity": "medium", "note": "necessary lock without [LOCK-REQUIRED] comment" },
+    { "id": "CC3", "artifact": "deadlock", "match": "category", "category": "sync-blocking", "lineHint": 46, "minSeverity": "critical", "note": ".Result in async method" },
+    { "id": "CC4", "artifact": "deadlock", "match": "category", "category": "lock-await", "lineHint": 55, "minSeverity": "critical", "note": "Monitor.Enter held across await" },
+    { "id": "CC5", "artifact": "deadlock", "match": "category", "category": "semaphore-leak", "lineHint": 67, "minSeverity": "high", "note": "WaitAsync without try/finally Release" },
+    { "id": "CC6", "artifact": "deadlock", "match": "category", "category": "configure-await", "lineHint": 74, "minSeverity": "low", "note": "missing ConfigureAwait(false) in library code" },
+    { "id": "CC7", "artifact": "deadlock", "match": "category", "category": "async-void", "lineHint": 80, "minSeverity": "low", "note": "async void outside event handler" },
+    { "id": "CC8", "artifact": "deadlock", "match": "category", "category": "lock-order", "lineHint": 87, "minSeverity": "medium", "note": "inconsistent semaphore acquisition order (A->B vs B->A)" }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "harness": "gc-guard",
+  "class": "analysis",
+  "artifacts": {
+    "alloc": {
+      "path": "02_allocation_findings.json",
+      "arrayKey": "hot_path_allocs",
+      "categoryField": "pattern",
+      "severityField": "severity"
+    },
+    "pooling": {
+      "path": "02_pooling_findings.json",
+      "arrayKey": "findings",
+      "categoryField": "pattern",
+      "severityField": "severity"
+    }
+  },
+  "review": {
+    "path": "03_peer_review.json",
+    "scoreField": "final_score"
+  },
+  "expected_defects": [
+    { "id": "GC1", "artifact": "alloc", "match": "category", "category": "new-in-loop", "lineHint": 22, "minSeverity": "medium", "note": "new byte[1024] inside for-loop" },
+    { "id": "GC2", "artifact": "alloc", "match": "category", "category": "boxing", "lineHint": 32, "minSeverity": "low", "note": "ArrayList.Add(int) boxes value type" },
+    { "id": "GC3", "artifact": "alloc", "match": "category", "category": "linq-hotpath", "lineHint": 38, "minSeverity": "low", "note": "Where/Select/ToList chain in hot path" },
+    { "id": "GC4", "artifact": "alloc", "match": "category", "category": "closure-capture", "lineHint": 47, "minSeverity": "low", "note": "loop-variable capture forces heap alloc" },
+    { "id": "GC5", "artifact": "alloc", "match": "category", "category": "string-concat", "lineHint": 58, "minSeverity": "medium", "note": "string += in loop" },
+    { "id": "GC6", "artifact": "pooling", "match": "category", "category": "arraypool-return-missing", "lineHint": 66, "minSeverity": "critical", "note": "ArrayPool.Rent without try/finally Return" },
+    { "id": "GC7", "artifact": "pooling", "match": "category", "category": "task-instead-of-valuetask", "lineHint": 75, "minSeverity": "low", "note": "hot path Task<T> should be ValueTask<T>" },
+    { "id": "GC8", "artifact": "pooling", "match": "category", "category": "substring-copy", "lineHint": 82, "minSeverity": "low", "note": "Substring copy should be AsSpan" }
+  ]
+}

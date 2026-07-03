@@ -1,0 +1,16 @@
+{
+  "harness": "pipeline",
+  "class": "generative",
+  "signals": [
+    {
+      "type": "contains-all",
+      "path": "03_load_test_audit.md",
+      "mustContain": ["APPROVE"]
+    },
+    {
+      "type": "regex",
+      "path": "04_pipeline_architecture.md",
+      "regex": "(?s).{200,}"
+    }
+  ]
+}
