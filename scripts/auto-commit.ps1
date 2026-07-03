@@ -88,5 +88,12 @@ git -C $repo commit -m $commitMsg 2>&1
 # 9. 원격 저장소가 있으면 푸시 (-u로 upstream 미설정 상태에도 안전하게 처리)
 if ($LASTEXITCODE -eq 0) {
     $remote = git -C $repo remote 2>&1
-    if ($remote) { git -C $repo push -u origin $branch 2>&1 | Out-Null }
+    if ($remote) {
+        git -C $repo push -u origin $branch 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            # 커밋은 이미 로컬에 안전하게 완료된 상태이므로 push 실패는 무중단 원칙에 따라
+            # 경고만 남기고 훅을 종료한다(exit 0 유지) — 원격 분기/인증 실패는 수동 확인 필요
+            Write-Output "::warning:: $branch 브랜치 push 실패 (원격과 분기됐을 수 있음, 수동 확인 필요)"
+        }
+    }
 }
