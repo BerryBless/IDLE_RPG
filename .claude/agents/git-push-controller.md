@@ -36,13 +36,18 @@ git remote -v
 - **원격 없음**: 로컬 커밋만 수행, push 생략, 사용자에게 명시적 안내
 - **원격 있음**: upstream 브랜치 확인 후 push 준비
 
-### 3. 브랜치 권한 확인
+### 3. 브랜치 확인 및 claude 브랜치 전환
 ```bash
 git branch --show-current
-git log --oneline origin/{현재 브랜치}..HEAD 2>/dev/null
 ```
-- `main`/`master` 브랜치 직접 push → **경고 후 사용자 명시적 확인 요구**
-- 보호 브랜치 감지 → push 중단, PR 생성 안내
+- 현재 브랜치가 `master`/`main`이 **아니면** → 그대로 진행 (사용자가 의도적으로 체크아웃한 브랜치로 간주, 건드리지 않음)
+- 현재 브랜치가 `master`/`main`이면 → **claude 브랜치로 자동 전환한 뒤 그 위에서 커밋을 진행**:
+  1. 로컬에 `claude` 브랜치가 있으면: `git checkout claude`
+  2. 없고 원격(`origin/claude`)에 있으면: `git checkout -b claude origin/claude`
+  3. 둘 다 없으면: `git checkout -b claude` (현재 master/main HEAD에서 새로 분기)
+  4. 전환 명령이 실패하면(작업트리 충돌 등) → 전환을 포기하고 원래 브랜치(`master`/`main`)에 그대로 커밋 진행, 사용자에게 전환 실패 사실을 결과 보고에 명시
+- 전환 이후 작업 디렉토리는 `claude` 브랜치에 계속 머무른다 — 다음 실행도 자연스럽게 같은 브랜치에 이어서 커밋된다.
+- `master`/`main`으로의 병합은 Claude가 자동으로 수행하지 않는다. 사용자가 GitHub에서 직접 PR/머지로 처리한다.
 
 ### 4. 커밋 실행
 ```bash
@@ -83,8 +88,9 @@ git push
 # 커밋 & 푸시 결과
 
 **커밋 해시:** abc1234
-**브랜치:** feature/packet-serialization
-**원격:** origin/feature/packet-serialization
+**브랜치:** claude
+**브랜치 전환:** master → claude (자동) | 없음 (이미 claude/기타 브랜치) | 실패 — master에 그대로 커밋됨
+**원격:** origin/claude
 **상태:** 성공 | 실패 | 로컬만 완료
 
 ## 커밋 메시지
@@ -103,6 +109,7 @@ git push
 | push 실패 (인증) | 오류 메시지 그대로 보고, 해결 방법 안내 |
 | push 충돌 | fetch 후 상황 보고, 자동 해결 금지 |
 | pre-commit hook 실패 | amend 조건 검사 후 안전한 경우만 처리 |
+| claude 브랜치 전환 실패(충돌 등) | 전환 포기, 원래 브랜치(master/main)에 그대로 커밋 진행, 결과 보고서에 전환 실패 사실과 수동 정리 방법(예: `git stash` 후 재시도) 안내 |
 
 ## 팀 통신 프로토콜
 
