@@ -1,11 +1,13 @@
 {
   "harness": "tdd",
   "class": "generative",
+  "_note": "2026-07-03 라이브 스모크로 발견: 이 저장소 환경의 dotnet test는 한국어 로케일로 출력되며, 실패 0건일 때 '실패:' 줄 자체가 나타나지 않는다(영어 'Failed: 0'과 다름). '통과' 존재 + '실패' 부재로 판정한다.",
   "signals": [
     {
-      "type": "regex",
+      "type": "contains-all",
       "path": "03_qa/test_results.txt",
-      "regex": "Failed:\\s*0"
+      "mustContain": ["통과"],
+      "mustNotContain": ["실패"]
     },
     {
       "type": "regex",
