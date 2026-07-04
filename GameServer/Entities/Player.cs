@@ -30,6 +30,18 @@ public sealed class Player : Entity
     /// <param name="amount">획득한 골드량</param>
     public void AddGold(BigNumber amount) => throw new NotImplementedException();
 
+    /// <summary>
+    /// <see cref="BaseStats"/>·<see cref="Entity.BaseTraits"/>에 착용 장비의 스탯 수정치를 합산하여
+    /// <see cref="Entity.FinalStats"/> 캐시를 갱신한다.
+    /// </summary>
+    /// <remarks>
+    /// <b>[성능 및 동시성 제약 조건]</b>
+    /// <list type="bullet">
+    /// <item><description><b>Thread Context:</b> 전투 갱신 루프(단일 스레드)에서만 호출되는 것을 전제로 한다. Not Thread-safe.</description></item>
+    /// <item><description><b>Memory Allocation:</b> <see cref="Traits.Clone"/> 호출로 매번 새 <see cref="Traits"/> 인스턴스 1개가 할당된다.
+    /// <c>BaseTraits</c>를 참조 그대로 재사용하면 아래 제자리 누적으로 원본이 오염되므로 의도된 할당이다.</description></item>
+    /// </list>
+    /// </remarks>
     public override void UpdateFinalStats()
     {
         // 기본
@@ -37,8 +49,10 @@ public sealed class Player : Entity
         FinalStats.Atk =  BaseStats.Atk;
         FinalStats.Def =  BaseStats.Def;
         FinalStats.Recovery =  BaseStats.Recovery;
-        FinalStats.CombatTraits = BaseTraits;
-        
+        // BaseTraits를 참조로 그대로 대입하면 아래 += 제자리 수정이 원본 BaseTraits까지 오염시켜
+        // UpdateFinalStats를 반복 호출할 때마다 특성치가 누적된다. 반드시 값 복사본을 사용한다.
+        FinalStats.CombatTraits = BaseTraits.Clone();
+
         // 장비
         var equipModiList = Equipment.GetAllModifiers();
         foreach (var modi in equipModiList)
@@ -67,10 +81,10 @@ public sealed class Player : Entity
                     FinalStats.CombatTraits.CritDmg += modi.Value;
                     break;
                 case StatType.ArmorPen:
-                    FinalStats.CombatTraits.CritDmg += modi.Value;
+                    FinalStats.CombatTraits.ArmorPen += modi.Value;
                     break;
                 case StatType.Lifesteal:
-                    FinalStats.CombatTraits.CritDmg += modi.Value;
+                    FinalStats.CombatTraits.Lifesteal += modi.Value;
                     break;
                 default:
                     //error

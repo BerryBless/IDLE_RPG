@@ -32,4 +32,22 @@ public sealed class Traits
     /// <param name="b">두 번째 피연산자</param>
     /// <returns>항목별 합산 결과 (상한 클램프 적용 전)</returns>
     public static Traits operator +(Traits a, Traits b) => throw new NotImplementedException();
+
+    /// <summary>
+    /// 이 인스턴스와 값이 동일한 새 <see cref="Traits"/> 인스턴스를 반환한다.
+    /// </summary>
+    /// <returns>필드값이 복사된 새 인스턴스 (원본과 참조를 공유하지 않음)</returns>
+    /// <remarks>
+    /// <see cref="Entities.Entity.UpdateFinalStats"/>에서 <c>BaseTraits</c>를 <see cref="Stats.FinalStats.CombatTraits"/>에
+    /// 대입할 때 참조를 그대로 공유하면, 이후 <c>CombatTraits</c>에 가해지는 제자리(in-place) 수정이
+    /// <c>BaseTraits</c> 원본까지 오염시켜 재계산할 때마다 값이 누적된다. 반드시 이 메서드로 값 복사본을 만들어 사용한다.
+    /// </remarks>
+    public Traits Clone() => new()
+    {
+        AtkSpeed = AtkSpeed,
+        CritProb = CritProb,
+        CritDmg = CritDmg,
+        ArmorPen = ArmorPen,
+        Lifesteal = Lifesteal
+    };
 }
