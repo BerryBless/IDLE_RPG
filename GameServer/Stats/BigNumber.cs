@@ -12,6 +12,7 @@ namespace GameServer.Stats;
 /// <item><description><b>Blocking 여부:</b> 순수 계산만 수행하며 항상 즉시 반환(non-blocking)된다.</description></item>
 /// </list>
 /// </remarks>
+/*
 public readonly struct BigNumber
 {
     /// <summary>정규화된 가수 부분. 일반적으로 [1.0, 10.0) 범위를 유지한다.</summary>
@@ -30,3 +31,7 @@ public readonly struct BigNumber
     /// <returns>가수 정규화가 적용된 곱셈 결과</returns>
     public BigNumber Multiply(BigNumber other) => throw new NotImplementedException();
 }
+*/
+
+
+

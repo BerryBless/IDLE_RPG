@@ -5,6 +5,7 @@ obj/
 riderModule.iml
 /_ReSharper.Caches/
 .idea/
+*.DotSettings.user
 _work*/
 tests/results/*
 !tests/results/SUMMARY.md
