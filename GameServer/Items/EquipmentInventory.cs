@@ -22,7 +22,8 @@ public sealed class EquipmentInventory
     /// <summary>현재 착용 중인 방어구 (미착용 시 null).</summary>
     private Armor? _equippedArmor;
 
-    /// <summary>현재 착용 중인 장신구 (미착용 시 null).</summary>
+    /// <summary>현재 착용 중인 장신구
+    /// (미착용 시 null).</summary>
     private Accessory? _equippedAccessory;
     
     // 장비가 변경되었는지 체크하는 플래그
