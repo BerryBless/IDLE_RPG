@@ -46,7 +46,7 @@ public abstract class Entity
     /// <see cref="BaseStats"/>·<see cref="BaseTraits"/>·장비·버프·<see cref="GetExtraModifiers"/> 수정치를
     /// 모두 합산하여 <see cref="FinalStats"/> 캐시를 갱신한다.
     /// </summary>
-    public void UpdateFinalStats() => throw new NotImplementedException();
+    public virtual void UpdateFinalStats() => throw new NotImplementedException();
 
     /// <summary>
     /// 하위 타입(플레이어의 장비, 몬스터의 어픽스 등) 고유의 추가 수정치 소스를 제공한다.

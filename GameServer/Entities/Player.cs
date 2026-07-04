@@ -7,7 +7,7 @@ namespace GameServer.Entities;
 public sealed class Player : Entity
 {
     /// <summary>이 캐릭터를 소유한 계정의 고유 ID.</summary>
-    public string AccountId { get; init; } = string.Empty;
+    public int AccountId { get; init; }
 
     /// <summary>현재 누적 경험치.</summary>
     public BigNumber CurrentExp { get; set; }
@@ -29,4 +29,53 @@ public sealed class Player : Entity
     /// <summary>골드를 획득하여 <see cref="CurrentGold"/>에 누적한다.</summary>
     /// <param name="amount">획득한 골드량</param>
     public void AddGold(BigNumber amount) => throw new NotImplementedException();
+
+    public override void UpdateFinalStats()
+    {
+        // 기본
+        FinalStats.MaxHp =  BaseStats.Hp;
+        FinalStats.Atk =  BaseStats.Atk;
+        FinalStats.Def =  BaseStats.Def;
+        FinalStats.Recovery =  BaseStats.Recovery;
+        FinalStats.CombatTraits = BaseTraits;
+        
+        // 장비
+        var equipModiList = Equipment.GetAllModifiers();
+        foreach (var modi in equipModiList)
+        {
+            switch (modi.StatType)
+            {
+                case StatType.Hp:
+                    FinalStats.MaxHp += modi.Value;
+                    break;
+                case StatType.Atk:
+                    FinalStats.Atk += modi.Value;
+                    break;
+                case StatType.Def:
+                    FinalStats.Def += modi.Value;
+                    break;
+                case StatType.Recovery:
+                    FinalStats.Recovery += modi.Value;
+                    break;
+                case StatType.AtkSpeed:
+                    FinalStats.CombatTraits.AtkSpeed += modi.Value;
+                    break;
+                case StatType.CritProb:
+                    FinalStats.CombatTraits.CritProb += modi.Value;
+                    break;
+                case StatType.CritDmg:
+                    FinalStats.CombatTraits.CritDmg += modi.Value;
+                    break;
+                case StatType.ArmorPen:
+                    FinalStats.CombatTraits.CritDmg += modi.Value;
+                    break;
+                case StatType.Lifesteal:
+                    FinalStats.CombatTraits.CritDmg += modi.Value;
+                    break;
+                default:
+                    //error
+                    break;
+            }
+        }
+    }
 }
