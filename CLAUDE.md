@@ -60,7 +60,9 @@ plan/<기능명>_<MMDD>.md
 
 ### 현재 플랜 문서 목록
 
-(아직 없음 — 첫 설계 결정 완료 시 이 표에 추가할 것)
+| 문서 | 요약 |
+|------|------|
+| [gameserver_domain_scaffold_0704.md](plan/gameserver_domain_scaffold_0704.md) | mermaid classDiagram 기반 GameServer 도메인 모델(스탯·전투·아이템·엔티티·보상) 스켈레톤 스캐폴딩 |
 
 ---
 
