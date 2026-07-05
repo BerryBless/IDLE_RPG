@@ -19,6 +19,30 @@ git-security-auditor → git-commit-writer → git-push-controller
 
 ---
 
+## Stop 훅과의 커밋 경합 방지 (락 프로토콜)
+
+**배경 [2026-07-05 사고]:** `scripts/auto-commit.ps1`(Stop 훅)은 `asyncRewake`로 백그라운드
+실행되고, 이 파이프라인은 서브 에이전트 대기·`y/n/edit` 확인 등으로 턴을 여러 번 넘긴다.
+그 턴 경계마다 Stop 훅이 재발동할 수 있어, 보안 감사가 끝나기도 전에 Stop 훅이 작업 트리
+전체를 먼저 커밋해버린 사례가 실측됐다. 이를 막기 위해 `.git/commitandpush.lock` 파일로
+"파이프라인 실행 중"임을 Stop 훅에 알린다. (`auto-commit.ps1`은 이 락의 mtime이 15분
+이내면 자동 커밋을 건너뛴다.)
+
+- **Phase 0 시작 시(첫 `git status` 확인보다 먼저) 락 생성:** `touch .git/commitandpush.lock`
+- **Phase 1·2·3 각 단계 시작 시 락 갱신(mtime 터치):** 동일한 `touch .git/commitandpush.lock` 재실행
+  — 사용자 확인 대기 등으로 턴이 길어져도 15분 만료 안전망이 오작동하지 않도록 유지
+- **파이프라인 종료 시(성공/실패/중단 등 모든 경로) 락 해제:** `rm -f .git/commitandpush.lock`
+  — Phase 4 직전, 또는 Phase 1 FAIL·Phase 2 `n` 중단 등 조기 종료 분기 각각에서 실행
+- **안전망:** 해제가 누락되어도(세션 중단 등) 락은 15분 후 만료된 것으로 간주되어
+  `auto-commit.ps1`이 자동 커밋을 재개하므로, 안전망 자체가 영구히 막히지는 않는다.
+- **부가 정리:** 락 생성 직후, 남아있는 `.git/auto_commit_msg.txt`가 있다면 삭제한다(`rm -f`)
+  — 이 파이프라인이 직접 새 커밋 메시지를 만들므로, 이전 턴에서 남은 낡은 메시지가 나중에
+  무관한 변경사항에 잘못 붙는 것을 방지한다.
+- **턴 노출 최소화:** Phase 1~3의 각 서브 에이전트는 가능하면 `run_in_background: false`
+  (foreground)로 실행해, 백그라운드 대기로 인한 불필요한 턴 종료(Stop 이벤트) 노출을 줄인다.
+
+---
+
 ## 절대 금지 규칙 (오케스트레이터 자체도 준수)
 
 이 파이프라인 내 모든 에이전트는 아래 명령을 **어떤 이유로도** 실행할 수 없다:
@@ -35,6 +59,12 @@ git-security-auditor → git-commit-writer → git-push-controller
 ---
 
 ## Phase 0: 컨텍스트 확인
+
+0. **락 생성 + 낡은 메시지 정리 (가장 먼저 실행):**
+   ```bash
+   touch .git/commitandpush.lock
+   rm -f .git/auto_commit_msg.txt
+   ```
 
 1. `_workspace/` 존재 여부 확인:
    - **미존재** → 초기 실행. `_workspace/` 생성 후 Phase 1 진행
@@ -58,6 +88,8 @@ git-security-auditor → git-commit-writer → git-push-controller
 
 ## Phase 1: 보안 감사 (git-security-auditor)
 
+**시작 시 락 갱신:** `touch .git/commitandpush.lock`
+
 ```python
 agent = Agent(
     agent_definition="git-security-auditor",
@@ -80,6 +112,7 @@ agent = Agent(
 **판정에 따른 분기:**
 - **PASS** → Phase 2 진행
 - **FAIL (CRITICAL/HIGH)** → 파이프라인 즉시 중단
+  - **락 해제:** `rm -f .git/commitandpush.lock`
   - 발견된 민감 정보 파일/라인 사용자에게 명시
   - 수정 방법 안내 (예: `.gitignore` 추가, 값 환경 변수화)
   - 수정 후 `/commitandpush` 재실행 안내
@@ -88,6 +121,8 @@ agent = Agent(
 ---
 
 ## Phase 2: 커밋 메시지 작성 (git-commit-writer)
+
+**시작 시 락 갱신:** `touch .git/commitandpush.lock`
 
 ```python
 agent = Agent(
@@ -112,6 +147,8 @@ agent = Agent(
 )
 ```
 
+**사용자 확인 대기 직전 락 갱신(가장 긴 대기 구간):** `touch .git/commitandpush.lock`
+
 생성된 메시지를 사용자에게 미리보기로 출력:
 ```
 📝 생성된 커밋 메시지:
@@ -127,12 +164,14 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 ```
 
 - **y**: Phase 3 진행
-- **n**: 파이프라인 중단
+- **n**: 파이프라인 중단 — **락 해제:** `rm -f .git/commitandpush.lock`
 - **edit**: 사용자가 직접 메시지 입력 후 Phase 3 진행
 
 ---
 
 ## Phase 3: 커밋 & 푸시 (git-push-controller)
+
+**시작 시 락 갱신:** `touch .git/commitandpush.lock`
 
 ```python
 agent = Agent(
@@ -160,6 +199,8 @@ agent = Agent(
 
 ## Phase 4: 결과 보고
 
+**결과 보고 직전 락 해제(성공 경로의 최종 해제 지점):** `rm -f .git/commitandpush.lock`
+
 `_workspace/03_push_result.md`를 읽어 사용자에게 최종 요약 출력:
 
 ```
@@ -186,11 +227,12 @@ agent = Agent(
 | 상황 | 처리 |
 |------|------|
 | git 저장소 아님 | 즉시 중단, "git init 또는 올바른 디렉토리에서 실행" 안내 |
-| 보안 감사 에이전트 실패 | FAIL로 처리, 안전 원칙에 따라 중단 |
+| 보안 감사 에이전트 실패 | FAIL로 처리, 안전 원칙에 따라 중단, 락 해제 |
 | 커밋 메시지 생성 실패 | 사용자에게 수동 입력 요청 |
-| push 인증 실패 | 오류 메시지 그대로 전달, 자격증명 안내 |
-| 네트워크 오류 | 로컬 커밋은 유지, push 재시도 안내 |
-| pre-commit hook 파이프라인 중단 | hook 오류 원문 출력, 수동 처리 안내 |
+| push 인증 실패 | 오류 메시지 그대로 전달, 자격증명 안내, 락 해제 |
+| 네트워크 오류 | 로컬 커밋은 유지, push 재시도 안내, 락 해제 |
+| pre-commit hook 파이프라인 중단 | hook 오류 원문 출력, 수동 처리 안내, 락 해제 |
+| **어떤 사유로든 파이프라인이 조기 중단** | 예외 없이 `rm -f .git/commitandpush.lock` 실행 후 중단 — 해제를 놓쳐도 15분 뒤 자동 만료되어 Stop 훅 안전망이 영구히 막히진 않지만, 그 15분 사이 다른 변경사항이 자동 커밋되지 않는 공백이 생기므로 가능하면 명시적으로 해제 |
 
 ---
 
