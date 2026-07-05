@@ -27,15 +27,18 @@ public sealed class StatusEffect
     /// <summary>디버프 여부 (false면 버프).</summary>
     public bool IsDebuff { get; init; }
 
+    /// <summary>이 효과가 활성화되어 있는 동안 부여하는 스탯 수정치 목록.</summary>
+    public List<StatModifier> Modifiers { get; init; } = new();
+
     /// <summary>경과 시간만큼 <see cref="TimeRemaining"/>을 감소시킨다.</summary>
     /// <param name="deltaTime">이전 갱신 이후 경과한 시간(초)</param>
-    public void Tick(float deltaTime) => throw new NotImplementedException();
+    public void Tick(float deltaTime) => TimeRemaining -= deltaTime;
 
     /// <summary>효과가 만료되었는지 여부를 반환한다.</summary>
     /// <returns><see cref="TimeRemaining"/>이 0 이하이면 true</returns>
-    public bool IsExpired() => throw new NotImplementedException();
+    public bool IsExpired() => TimeRemaining <= 0f;
 
     /// <summary>이 효과가 부여하는 스탯 수정치 목록을 반환한다.</summary>
     /// <returns>적용할 <see cref="StatModifier"/> 목록</returns>
-    public List<StatModifier> GetModifiers() => throw new NotImplementedException();
+    public List<StatModifier> GetModifiers() => Modifiers;
 }

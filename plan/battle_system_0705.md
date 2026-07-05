@@ -52,12 +52,12 @@ flowchart TB
         subgraph LOOP [전투 틱 루프 · deltaTime 구동]
             direction TB
             t0["Δt 진행 (deltaTime)"]
-            t1["쿨타임 · 공속 · 마나 회복 갱신"]
-            t2{"행동 선택<br/>마나 충분 & 스킬 쿨 완료?"}
-            t3s["스킬 자동 시전<br/>(마나 소모)"]
+            t1["쿨타임 · 공속 · 마나 회복 갱신<br/>*마나 재생 프리미티브 구현됨: Entity.Update*"]
+            t2{"행동 선택<br/>마나 충분 & 스킬 쿨 완료?<br/>*게이팅 프리미티브 구현됨: Entity.TryConsumeMana*"}
+            t3s["스킬 자동 시전<br/>(마나 소모)<br/>*스킬 선택·발동 루프 자체는 BattleLoop 신규 구현 대상(다음 사이클)*"]
             t3a["평타<br/>(공속 쿨 소모)"]
             t4["피해량 연산<br/>CalcFinalDamage (스탯 + 버프/디버프)"]
-            t5["버프/디버프 지속시간 · DoT 갱신<br/>BuffManager.Update(Δt)"]
+            t5["버프/디버프 지속시간 갱신<br/>BuffManager.Update(Δt) — 구현됨<br/>*DoT(지속 피해)는 후속 사이클: 현재 StatusEffect는 스탯 모디파이어 부여만 지원*"]
             c1{"캐릭터 파티 전멸?"}
             c2{"몬스터 전멸?"}
 
@@ -125,36 +125,54 @@ flowchart TB
 | 11 | `s_fail` 강등/부활 OR 애매 | **제자리 부활**로 단일화, 강등 제거 |
 | 12 | `\n` 렌더 불가(mermaid는 `<br/>` 필요) | 전부 `<br/>`로 교체 |
 
-## 4. 컴포넌트 구조 (다음 사이클 구현 대상)
+**구현 완료 갱신(2026-07-05 TDD 사이클):** 위 표의 `t1`(마나 회복)·`t2`(마나 게이팅)·`t4`(피해량)·
+`t5`(버프 갱신, DoT 제외)·`r1`(경험치/골드/아이템 드롭)·오프라인 정산 경로는 실제 코드로 구현되어
+`GameServer.Tests`(41개 테스트)로 검증됨. `t3s`의 스킬 발동 루프 자체, `s1/b1/w1/b4`(웨이브·보스·스폰·등반),
+DoT는 여전히 다음 사이클 대상.
 
-다이어그램의 각 노드가 요구하는 신규/확장 컴포넌트. 이번 사이클은 설계만 확정하며,
-아래 트리는 실제 파일이 아니라 **다음 구현 사이클의 청사진**이다.
+## 4. 컴포넌트 구조
+
+다이어그램의 각 노드가 요구하는 컴포넌트. **2026-07-05 TDD 사이클에서 스텁 구현이 완료**된 항목은
+"구현됨"으로 표시. `BattleLoop`/`Stage`/`Wave`/`MonsterSpawner`/`ReviveCostCalculator`는 여전히
+**다음 구현 사이클의 청사진**(실제 파일 아님).
 
 ```
 GameServer/
 ├─ Stats/
-│  └─ StatType.cs        (기존 enum에 Mana/MaxMana 추가 필요 — §7)
+│  ├─ StatType.cs        — 구현됨. Mana/ManaRegen 추가
+│  ├─ BaseStats.cs       — 구현됨. Mana/ManaRegen 필드 추가
+│  └─ FinalStats.cs      — 구현됨. MaxMana/CurrentMana/ManaRegen 필드 추가
 ├─ Combat/
-│  ├─ BuffManager.cs      (기존, Update(deltaTime) 실구현 대상)
-│  └─ StatusEffect.cs     (기존, Tick 실구현 대상)
+│  ├─ BuffManager.cs      — 구현됨. ApplyEffect/RemoveEffect/Update/GetAllActiveModifiers
+│  └─ StatusEffect.cs     — 구현됨. Tick/IsExpired/GetModifiers + Modifiers 필드 추가
 ├─ Entities/
-│  └─ Entity.cs           (기존, Update(deltaTime)/TakeDamage 실구현 대상)
+│  ├─ Entity.cs           — 구현됨. TakeDamage/Update/TryConsumeMana/RestoreResources +
+│  │                        통합 스탯 집계 파이프라인(UpdateFinalStats, Flat→PercentAdd→PercentMult).
+│  │                        BaseStats/BaseTraits를 public으로 변경(외부에서 설정할 경로가 없던 gap 해소)
+│  ├─ Player.cs           — 구현됨. AddExp/AddGold, GetExtraModifiers(장비 위임).
+│  │                        기존 UpdateFinalStats 오버라이드(ModType 무시·버프 미반영 버그) 제거
+│  └─ Monster.cs          — 구현됨. GetExtraModifiers, MonsterAffixes를 public init으로 변경
 ├─ Systems/
-│  ├─ BattleManager.cs    (기존, CalcFinalDamage 구현 완료 — 틱 루프에서 t4 호출)
-│  ├─ OfflineProgressionManager.cs (기존, ProcessOfflineTime 실구현 대상)
-│  ├─ RewardComponent.cs  (기존, GenerateLoot 실구현 대상)
-│  ├─ BattleLoop.cs       (신규) — 온라인 틱 루프 스케줄러 (t0~c2), deltaTime 구동
-│  ├─ Stage.cs            (신규) — 스테이지 번호, 웨이브 목록, 보스 조건(N/N), 제한시간
-│  ├─ Wave.cs              (신규) — 웨이브당 몬스터 스폰 목록
-│  ├─ MonsterSpawner.cs   (신규) — 웨이브/보스 스폰 팩토리
-│  └─ ReviveCostCalculator.cs (신규) — 부활 코스트 공식 (§7 미결)
+│  ├─ BattleManager.cs    — 구현 완료(이전 사이클) — 틱 루프에서 t4 호출
+│  ├─ OfflineProgressionManager.cs — 구현됨. 기대 DPS 공식 기반 killCount 환산
+│  ├─ RewardComponent.cs  — 구현됨. GenerateLoot(킬수·드롭테이블 확률 롤), 결정적 RNG 주입 생성자 추가
+│  ├─ LootItem.cs         — 신규(Item 구체 타입 부재로 추가, DropPool과 동일한 보완 패턴)
+│  ├─ BattleLoop.cs       (신규 예정) — 온라인 틱 루프 스케줄러 (t0~c2), deltaTime 구동
+│  ├─ Stage.cs            (신규 예정) — 스테이지 번호, 웨이브 목록, 보스 조건(N/N), 제한시간
+│  ├─ Wave.cs              (신규 예정) — 웨이브당 몬스터 스폰 목록
+│  ├─ MonsterSpawner.cs   (신규 예정) — 웨이브/보스 스폰 팩토리
+│  └─ ReviveCostCalculator.cs (신규 예정) — 부활 코스트 공식 (§8 미결)
+tests/
+└─ GameServer.Tests/      — 신규. xUnit, GameServer ProjectReference, InternalsVisibleTo 부여받음
 ```
 
-**의존 관계:** `BattleLoop`가 `BattleManager`(피해량)·`BuffManager`(상태이상)·`Entity`(생사 판정)를
-구동하고, 결과를 `RewardComponent`에 위임한다. `OfflineProgressionManager`는 `BattleLoop`와
-동일한 DPS/HP 파라미터를 참조해 오프라인 수식 결과가 온라인 시뮬레이션과 어긋나지 않도록 한다.
+**의존 관계:** `BattleLoop`(다음 사이클)가 `BattleManager`(피해량)·`BuffManager`(상태이상)·`Entity`(생사 판정)를
+구동하고, 결과를 `RewardComponent`에 위임할 예정. `OfflineProgressionManager`는 `BattleManager`와
+동일한 `DefenseConstant`·기대 DPS 파라미터를 공유해 오프라인 수식 결과가 온라인 시뮬레이션과 어긋나지 않도록 한다(구현됨).
 
-## 5. 핵심 API (제안, 다음 사이클 구현)
+## 5. 핵심 API
+
+**`BattleLoop`(다음 사이클 제안, 미구현):**
 
 ```csharp
 namespace GameServer.Systems;
@@ -165,7 +183,7 @@ namespace GameServer.Systems;
 /// <remarks>
 /// <b>[성능 및 동시성 제약 조건]</b>
 /// - Thread Context: 게임 서버의 틱 스케줄러 스레드에서 호출됨. 동기 블로킹(DB/File I/O) 금지.
-/// - Memory Policy: 웨이브당 몬스터 리스트는 풀링 검토 대상(§7).
+/// - Memory Policy: 웨이브당 몬스터 리스트는 풀링 검토 대상(§8).
 /// - Concurrency: 플레이어별 단일 BattleLoop 인스턴스 가정, 외부 동기화 불필요.
 /// </remarks>
 public sealed class BattleLoop
@@ -174,50 +192,68 @@ public sealed class BattleLoop
 }
 ```
 
-```csharp
-namespace GameServer.Systems;
+**`OfflineProgressionManager`(이번 사이클 구현 완료 — `GameServer/Systems/OfflineProgressionManager.cs`):**
 
-/// <summary>
-/// 오프라인 경과 시간을 킬수 기반 수식으로 정산해 누적 보상을 계산한다.
-/// 온라인 BattleLoop와 동일한 DPS/몬스터HP 파라미터를 사용해 정합성을 유지해야 한다.
-/// </summary>
-public sealed class OfflineProgressionManager
+```csharp
+public LootData ProcessOfflineTime(Player player, Monster stageMonster, int offlineSeconds)
 {
-    public LootData ProcessOfflineTime(Player player, Monster stageMonster, int offlineSeconds)
-        => throw new NotImplementedException();
+    var attacker = player.FinalStats;
+    var target = stageMonster.FinalStats;
+
+    var defMult = DefenseConstant / (Math.Max(0, target.Def - attacker.CombatTraits.ArmorPen) + DefenseConstant);
+    double effectiveDps = attacker.Atk
+        * attacker.CombatTraits.AtkSpeed
+        * (1 + attacker.CombatTraits.CritProb * attacker.CombatTraits.CritDmg)
+        * defMult;
+
+    int killCount = target.MaxHp > 0 && effectiveDps > 0
+        ? (int)Math.Floor(offlineSeconds * effectiveDps / target.MaxHp)
+        : 0;
+
+    return stageMonster.Rewards.GenerateLoot(killCount);
 }
 ```
+
+`DefenseConstant`(=100)는 `BattleManager.CalcFinalDamage`와 동일한 값을 사용해 온라인/오프라인 뎀감 공식을
+일치시킨다. 치명타는 매 타격 RNG 대신 `1 + CritProb×CritDmg` 기대값으로 치환해 결정적으로 계산한다.
 
 ## 6. 변경 파일 목록
 
 **이번 사이클 (설계만):**
 - 신규: `plan/battle_system_0705.md` (본 문서)
 
-**다음 구현 사이클 예정 (신규):**
+**2026-07-05 TDD 사이클 완료 (신규):**
+- `tests/GameServer.Tests/`(GameServer.Tests.csproj, SmokeTests.cs + Combat/Entities/Systems 하위 테스트, 41개)
+- `GameServer/Systems/LootItem.cs`(Item 구체 타입 부재 보완, DropPool과 동일 패턴)
+
+**2026-07-05 TDD 사이클 완료 (수정 — 스텁 실구현):**
+- `Combat/StatusEffect.cs`(Tick/IsExpired/GetModifiers + Modifiers 필드), `Combat/BuffManager.cs`(ApplyEffect/RemoveEffect/Update/GetAllActiveModifiers)
+- `Entities/Entity.cs`(TakeDamage/Update/TryConsumeMana/RestoreResources + 통합 UpdateFinalStats 파이프라인, BaseStats/BaseTraits public화)
+- `Entities/Player.cs`(AddExp/AddGold/GetExtraModifiers, 버그 있던 UpdateFinalStats 오버라이드 제거), `Entities/Monster.cs`(GetExtraModifiers, MonsterAffixes public화)
+- `Systems/RewardComponent.cs`(GenerateLoot + 결정적 RNG 주입 생성자), `Systems/OfflineProgressionManager.cs`(ProcessOfflineTime)
+- `Stats/StatType.cs`/`BaseStats.cs`/`FinalStats.cs`(Mana/ManaRegen 추가), `GameServer/GameServer.csproj`(InternalsVisibleTo), `IDLE_RPG.sln`(GameServer.Tests 등록)
+
+**다음 구현 사이클 예정 (신규, 미착수):**
 - `Systems/BattleLoop.cs`, `Systems/Stage.cs`, `Systems/Wave.cs`,
   `Systems/MonsterSpawner.cs`, `Systems/ReviveCostCalculator.cs`
 
-**다음 구현 사이클 예정 (수정 — 기존 스텁 실구현):**
-- `Systems/BattleManager.cs` 호출부 연결, `Systems/OfflineProgressionManager.cs`,
-  `Systems/RewardComponent.cs`, `Combat/BuffManager.cs`, `Combat/StatusEffect.cs`,
-  `Entities/Entity.cs`, `Stats/StatType.cs`(Mana 추가)
-
 ## 7. 빌드 검증
 
-이번 사이클은 설계 문서 작성만 포함하며 코드 변경이 없으므로 빌드 검증 대상 없음.
-다음 구현 사이클에서 위 파일들이 추가/수정되면:
-
 ```powershell
-dotnet build GameServer/GameServer.csproj
+dotnet build IDLE_RPG.sln
+dotnet test tests/GameServer.Tests/GameServer.Tests.csproj
 dotnet run --project GameServer/GameServer.csproj
 ```
+
+**실행 결과(2026-07-05):** 솔루션 전체 0 warning / 0 error. `GameServer.Tests` 41/41 통과.
+`GameServer/Main.cs` 예제 회귀 없음 확인(`total damage = 99`, 기존과 동일한 장비·공격력 조합 기준).
 
 ## 8. 향후 확장 포인트 (미결 사항)
 
 - 부활 코스트 공식 확정 (골드 지수 증가 vs 고정 쿨다운) — `ReviveCostCalculator`
-- 오프라인 수식 `f(DPS, 몬스터HP, Δt)`의 정확한 정의와, 온라인 틱 시뮬레이션 결과와의
-  정합성 검증 방법(예: 동일 시드로 양쪽 결과 비교 테스트)
-- `StatType` enum에 `Mana`/`MaxMana` 추가 여부 및 회복 공식
+- `BattleLoop`/`Stage`/`Wave`/`MonsterSpawner`: 웨이브·보스 스폰, 스킬 자동 선택·발동(`t3s`), DoT(지속 피해) 실행 루프
 - 웨이브당 몬스터 수·보스 조건(`N/N`)을 스테이지별로 가변화하는 데이터 스키마(JSON/ScriptableObject 등)
+- `BigNumber` struct 활성화(현재 `double` 별칭) 시 `EquipmentInventory`/`Entity` 등 연쇄 영향 검토
+- 아이템 마스터 데이터 조회 시스템(`LootItem`을 실제 `Weapon`/`Armor`/`Accessory`로 구체화)
 - 멀티플레이 접점 (본 설계는 싱글 플레이 범위로 한정)
 - 액티브 플레이 보상(수동 개입 시 추가 보상) 도입 여부 — 완전 자동 채택으로 이번 사이클엔 배제

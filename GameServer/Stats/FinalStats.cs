@@ -28,6 +28,15 @@ public sealed class FinalStats
     /// <summary>최종 초당 회복량.</summary>
     public BigNumber Recovery { get; set; }
 
+    /// <summary>현재 마나.</summary>
+    public BigNumber CurrentMana { get; set; }
+
+    /// <summary>최종 최대 마나.</summary>
+    public BigNumber MaxMana { get; set; }
+
+    /// <summary>최종 초당 마나 재생량.</summary>
+    public BigNumber ManaRegen { get; set; }
+
     /// <summary>최종 전투 특성치.</summary>
     public Traits CombatTraits { get; set; } = new();
 }

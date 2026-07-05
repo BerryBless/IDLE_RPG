@@ -20,17 +20,35 @@ public sealed class BuffManager
 
     /// <summary>새 상태 효과를 부여한다.</summary>
     /// <param name="effect">부여할 효과</param>
-    public void ApplyEffect(StatusEffect effect) => throw new NotImplementedException();
+    public void ApplyEffect(StatusEffect effect) => _activeEffects.Add(effect);
 
     /// <summary>지정한 상태 효과를 즉시 제거한다.</summary>
     /// <param name="effect">제거할 효과</param>
-    public void RemoveEffect(StatusEffect effect) => throw new NotImplementedException();
+    public void RemoveEffect(StatusEffect effect) => _activeEffects.Remove(effect);
 
     /// <summary>경과 시간만큼 모든 활성 효과를 갱신하고 만료된 효과를 제거한다.</summary>
     /// <param name="deltaTime">이전 갱신 이후 경과한 시간(초)</param>
-    public void Update(float deltaTime) => throw new NotImplementedException();
+    public void Update(float deltaTime)
+    {
+        for (int i = _activeEffects.Count - 1; i >= 0; i--)
+        {
+            _activeEffects[i].Tick(deltaTime);
+            if (_activeEffects[i].IsExpired())
+            {
+                _activeEffects.RemoveAt(i);
+            }
+        }
+    }
 
     /// <summary>현재 활성화된 모든 효과의 스탯 수정치를 합쳐 반환한다.</summary>
     /// <returns>활성 효과들이 부여하는 <see cref="StatModifier"/> 전체 목록</returns>
-    public List<StatModifier> GetAllActiveModifiers() => throw new NotImplementedException();
+    public List<StatModifier> GetAllActiveModifiers()
+    {
+        var result = new List<StatModifier>();
+        foreach (var effect in _activeEffects)
+        {
+            result.AddRange(effect.GetModifiers());
+        }
+        return result;
+    }
 }
