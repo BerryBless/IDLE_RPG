@@ -103,10 +103,37 @@ public class EntityAggregationTests
     }
 
     [Fact]
+    public void MultiplePercentMult_SameWeapon_MultiplyIndependently()
+    {
+        // 코드리뷰 F8 회귀: EquipmentInventory.GetAllModifiers()가 더 이상 동일 StatType+ModType을
+        // 합산(Sum)하지 않으므로, 같은 무기 안의 두 PercentMult도 (1+0.1)*(1+0.1)=1.21로 독립
+        // 곱연산되어야 한다(이전 버그였다면 합산되어 (1+0.2)=1.2가 됐을 것).
+        var player = MakePlayer();
+        var weapon = new Weapon
+        {
+            InstanceId = "w1",
+            ItemMetaId = 1,
+            Name = "테스트 검",
+            BaseModifiers =
+            [
+                new StatModifier { StatType = StatType.Atk, ModType = ModifierType.PercentMult, Value = 0.1 },
+                new StatModifier { StatType = StatType.Atk, ModType = ModifierType.PercentMult, Value = 0.1 }
+            ]
+        };
+        player.Equipment.Equip(weapon, SlotType.Weapon);
+
+        player.UpdateFinalStats();
+
+        // 100 * 1.1 * 1.1 = 121 (합산이었다면 100 * 1.2 = 120)
+        Assert.Equal(121, player.FinalStats.Atk, precision: 5);
+    }
+
+    [Fact]
     public void MultiplePercentMult_FromDifferentSources_MultiplyIndependently()
     {
-        // 참고: EquipmentInventory.GetAllModifiers()는 동일 StatType+ModType 수정치를 소스(장비) 내부에서
-        // 먼저 합산하므로(기존 구현, 이번 스코프 밖), "독립 곱연산"은 서로 다른 소스(장비 vs 버프)일 때 관찰된다.
+        // EquipmentInventory.GetAllModifiers()는 더 이상 동일 StatType+ModType 수정치를 합산하지
+        // 않으므로(코드리뷰 F8), 소스가 같든 다르든 PercentMult는 항상 독립적으로 곱연산된다.
+        // 이 테스트는 장비/버프처럼 서로 다른 소스가 섞였을 때도 동일하게 성립함을 확인한다.
         var player = MakePlayer();
         var armor = new Armor
         {

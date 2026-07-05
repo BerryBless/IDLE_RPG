@@ -39,4 +39,12 @@ public sealed class FinalStats
 
     /// <summary>최종 전투 특성치.</summary>
     public Traits CombatTraits { get; set; } = new();
+
+    /// <summary>
+    /// 이 엔티티의 공격이 받는 공격력 배율(주로 무기에서 기인). 기본값 1.0(배율 없음).
+    /// <see cref="GameServer.Entities.Entity.UpdateFinalStats"/>가 <see cref="GameServer.Entities.Entity.GetAttackScaling"/>으로
+    /// 갱신하며, 장비·버프 <see cref="StatModifier"/> 그룹핑 대상이 아니라 별도 필드로 관리한다
+    /// (배율은 합산성이 없는 값이라 Flat/PercentAdd/PercentMult 파이프라인에 태우지 않음).
+    /// </summary>
+    public BigNumber AttackScaling { get; set; } = 1.0;
 }

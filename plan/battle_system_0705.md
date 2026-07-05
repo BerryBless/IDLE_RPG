@@ -56,9 +56,9 @@ flowchart TB
             t2{"행동 선택<br/>마나 충분 & 스킬 쿨 완료?<br/>*게이팅 프리미티브 구현됨: Entity.TryConsumeMana*"}
             t3s["스킬 자동 시전<br/>(마나 소모)<br/>*스킬 선택·발동 루프 자체는 BattleLoop 신규 구현 대상(다음 사이클)*"]
             t3a["평타<br/>(공속 쿨 소모)"]
-            t4["피해량 연산<br/>CalcFinalDamage (스탯 + 버프/디버프)"]
+            t4["피해량 연산<br/>CalcFinalDamage (스탯 + 버프/디버프)<br/>*장비 PercentMult 소스 무관 독립 곱연산(코드리뷰 F8 수정)*"]
             t5["버프/디버프 지속시간 갱신<br/>BuffManager.Update(Δt) — 구현됨<br/>*DoT(지속 피해)는 후속 사이클: 현재 StatusEffect는 스탯 모디파이어 부여만 지원*"]
-            c1{"캐릭터 파티 전멸?"}
+            c1{"캐릭터 파티 전멸?<br/>*개별 Entity 사망(CurrentHp 0 이하) 시 Update 전체 정지(코드리뷰 F6, Entity.IsAlive) — 파티 전멸 판정 자체는 BattleLoop 신규 구현 대상*"}
             c2{"몬스터 전멸?"}
 
             t0 --> t1 --> t2
@@ -74,7 +74,7 @@ flowchart TB
         s1 --> LOOP
 
         c1 -- 전멸 --> FAIL
-        c2 -- "전멸(처치)" --> r1["일반 보상 획득<br/>골드 / 경험치 / 아이템 드롭(DropTable)"]
+        c2 -- "전멸(처치)" --> r1["일반 보상 획득<br/>골드 / 경험치 / 아이템 드롭(DropTable)<br/>*ItemMetaId별 수량 집계로 할당 최소화(코드리뷰 F11)*"]
         r1 --> r2["경험치 누적 → 레벨업 판정<br/>(캐릭터 레벨 · 스탯 상승, 스테이지 등반과 별개)"]
         r2 --> w1{"보스 등장 조건?<br/>(웨이브 N/N 완료)"}
 
@@ -140,22 +140,35 @@ DoT는 여전히 다음 사이클 대상.
 GameServer/
 ├─ Stats/
 │  ├─ StatType.cs        — 구현됨. Mana/ManaRegen 추가
-│  ├─ BaseStats.cs       — 구현됨. Mana/ManaRegen 필드 추가
-│  └─ FinalStats.cs      — 구현됨. MaxMana/CurrentMana/ManaRegen 필드 추가
+│  ├─ BaseStats.cs       — 구현됨. Mana/ManaRegen 필드 추가. ※ operator+는 여전히 미구현
+│  │                        스텁(NotImplementedException) — 파이프라인이 필드를 직접 읽어 호출되지
+│  │                        않으므로 런타임 영향은 없음(코드리뷰 F9)
+│  └─ FinalStats.cs      — 구현됨. MaxMana/CurrentMana/ManaRegen + AttackScaling 필드 추가
+│                           (AttackScaling은 코드리뷰 F1 수정으로 추가: 무기 배율을 온라인·오프라인이
+│                           동일하게 읽도록 함)
 ├─ Combat/
 │  ├─ BuffManager.cs      — 구현됨. ApplyEffect/RemoveEffect/Update/GetAllActiveModifiers
 │  └─ StatusEffect.cs     — 구현됨. Tick/IsExpired/GetModifiers + Modifiers 필드 추가
 ├─ Entities/
 │  ├─ Entity.cs           — 구현됨. TakeDamage/Update/TryConsumeMana/RestoreResources +
-│  │                        통합 스탯 집계 파이프라인(UpdateFinalStats, Flat→PercentAdd→PercentMult).
-│  │                        BaseStats/BaseTraits를 public으로 변경(외부에서 설정할 경로가 없던 gap 해소)
-│  ├─ Player.cs           — 구현됨. AddExp/AddGold, GetExtraModifiers(장비 위임).
+│  │                        통합 스탯 집계 파이프라인(UpdateFinalStats, Flat→PercentAdd→PercentMult) +
+│  │                        GetAttackScaling 훅(코드리뷰 F1). TakeDamage/TryConsumeMana 음수 값
+│  │                        가드 추가(코드리뷰 F5).
+│  │                        BaseStats/BaseTraits를 public으로 변경(외부에서 설정할 경로가 없던 gap 해소).
+│  │                        ※ Traits.operator+(`Stats/Traits.cs`)도 BaseStats와 동일하게 미구현
+│  │                        스텁이나 호출되지 않아 런타임 영향 없음(코드리뷰 F9)
+│  ├─ Player.cs           — 구현됨. AddExp/AddGold, GetExtraModifiers(장비 위임),
+│  │                        GetAttackScaling(장착 무기 위임, 코드리뷰 F1).
 │  │                        기존 UpdateFinalStats 오버라이드(ModType 무시·버프 미반영 버그) 제거
 │  └─ Monster.cs          — 구현됨. GetExtraModifiers, MonsterAffixes를 public init으로 변경
 ├─ Systems/
-│  ├─ BattleManager.cs    — 구현 완료(이전 사이클) — 틱 루프에서 t4 호출
-│  ├─ OfflineProgressionManager.cs — 구현됨. 기대 DPS 공식 기반 killCount 환산
-│  ├─ RewardComponent.cs  — 구현됨. GenerateLoot(킬수·드롭테이블 확률 롤), 결정적 RNG 주입 생성자 추가
+│  ├─ BattleManager.cs    — 구현 완료(이전 사이클) — 틱 루프에서 t4 호출.
+│  │                        코드리뷰 F1로 CalcFinalDamage가 FinalStats.AttackScaling을 자동으로
+│  │                        곱하도록 수정, attackScaling 파라미터는 "추가 배율"로 의미 축소
+│  ├─ OfflineProgressionManager.cs — 구현됨. 기대 DPS 공식 기반 killCount 환산.
+│  │                        코드리뷰 F1(AttackScaling 누락)·F2(음수 offlineSeconds 클램프) 수정
+│  ├─ RewardComponent.cs  — 구현됨. GenerateLoot(킬수·드롭테이블 확률 롤), 결정적 RNG 주입 생성자 추가.
+│  │                        코드리뷰 F3(음수 killCount 클램프)·F4(MinQty>MaxQty 방어) 수정
 │  ├─ LootItem.cs         — 신규(Item 구체 타입 부재로 추가, DropPool과 동일한 보완 패턴)
 │  ├─ BattleLoop.cs       (신규 예정) — 온라인 틱 루프 스케줄러 (t0~c2), deltaTime 구동
 │  ├─ Stage.cs            (신규 예정) — 스테이지 번호, 웨이브 목록, 보스 조건(N/N), 제한시간
@@ -233,6 +246,27 @@ public LootData ProcessOfflineTime(Player player, Monster stageMonster, int offl
 - `Systems/RewardComponent.cs`(GenerateLoot + 결정적 RNG 주입 생성자), `Systems/OfflineProgressionManager.cs`(ProcessOfflineTime)
 - `Stats/StatType.cs`/`BaseStats.cs`/`FinalStats.cs`(Mana/ManaRegen 추가), `GameServer/GameServer.csproj`(InternalsVisibleTo), `IDLE_RPG.sln`(GameServer.Tests 등록)
 
+**2026-07-05 코드리뷰 수정 사이클 완료 (동일 날짜, TDD 사이클 직후 진행):**
+다이어그램 대비 실제 구현을 검토한 결과 발견된 F1(온라인/오프라인 정합성 버그)과 F2~F5(값 검증
+누락)를 TDD로 수정. F9~F10(문서 라벨 정확도)도 함께 정리.
+- `Stats/FinalStats.cs`(AttackScaling 필드 추가), `Entities/Entity.cs`(GetAttackScaling 훅 +
+  TakeDamage/TryConsumeMana 음수값 가드), `Entities/Player.cs`(GetAttackScaling 오버라이드)
+- `Systems/BattleManager.cs`(CalcFinalDamage가 FinalStats.AttackScaling 자동 반영),
+  `Systems/OfflineProgressionManager.cs`(attackScaling 반영 + offlineSeconds 클램프),
+  `Systems/RewardComponent.cs`(killCount 클램프 + MinQty>=MaxQty 방어)
+- `GameServer/Main.cs`(CalcFinalDamage 호출부 단순화, 헤더 주석 갱신)
+- 신규 `tests/GameServer.Tests/Systems/BattleManagerTests.cs` + 기존 테스트 파일에 F1~F5 회귀
+  테스트 9건 추가(총 50개 통과)
+
+**2026-07-05 코드리뷰 F6/F8/F11 후속 정리 완료 (상세: `plan/battle_review_followup_0705.md`):**
+- `Entities/Entity.cs`: 사망(`CurrentHp<=0`) 시 `Update()` 전체 조기 리턴 + `IsAlive` 프로퍼티 추가(F6)
+- `Items/EquipmentInventory.cs`: `GetAllModifiers()`의 `GroupBy+Sum` 병합 제거, 이어붙이기+캐싱만 유지(F8) —
+  장비 내부 PercentMult가 서로 다른 소스와 동일하게 독립 곱연산되도록 통일
+- `Systems/RewardComponent.cs`: `GenerateLoot`을 `ItemMetaId`별 수량 집계로 변경, 할당량이
+  `killCount`가 아닌 `DropTable` 크기에 비례하도록 개선(F11)
+- 신규 `tests/GameServer.Tests/Items/EquipmentInventoryTests.cs` + 기존 테스트 파일에 회귀
+  테스트 8건 추가/수정(총 58개 통과)
+
 **다음 구현 사이클 예정 (신규, 미착수):**
 - `Systems/BattleLoop.cs`, `Systems/Stage.cs`, `Systems/Wave.cs`,
   `Systems/MonsterSpawner.cs`, `Systems/ReviveCostCalculator.cs`
@@ -245,8 +279,10 @@ dotnet test tests/GameServer.Tests/GameServer.Tests.csproj
 dotnet run --project GameServer/GameServer.csproj
 ```
 
-**실행 결과(2026-07-05):** 솔루션 전체 0 warning / 0 error. `GameServer.Tests` 41/41 통과.
-`GameServer/Main.cs` 예제 회귀 없음 확인(`total damage = 99`, 기존과 동일한 장비·공격력 조합 기준).
+**실행 결과(2026-07-05, F6/F8/F11 후속 정리 반영):** 솔루션 전체 0 warning / 0 error. `GameServer.Tests`
+58/58 통과. 기존 `IdleRpg.HarnessTests` 98/98 영향 없음. `GameServer/Main.cs` 예제 회귀 없음 확인
+(`total damage = 99` 유지 — 무기 배율 적용 메커니즘은 수동 파라미터 전달에서
+`FinalStats.AttackScaling` 자동 반영으로 바뀌었으나 결과값은 동일).
 
 ## 8. 향후 확장 포인트 (미결 사항)
 

@@ -161,3 +161,226 @@ Offline system ready: OfflineProgressionManager
 - `OfflineProgressionManager.ProcessOfflineTime` 오프라인 보상 공식 확정 시,
   다이어그램의 `<<Singleton>>` 스테레오타입을 실제로 반영할지(정적 인스턴스 vs DI 등록) 별도 결정 필요
 - 각 항목이 설계 확정되면 `plan/<기능명>_MMDD.md` 형식으로 후속 문서화
+
+## 8. 부록: 2026-07-05 구현 상태 갱신
+
+이 문서의 §1~7은 **초기 스캐폴딩 시점(2026-07-04)의 스켈레톤 구조**를 기록한 것이다. 이후
+`plan/battle_system_0705.md`(전투 플로우 설계 + TDD 구현)와 그 코드리뷰 후속(F1~F11)을 거치며
+로직이 실제로 채워지고 일부 구조가 바뀌었다. 아래는 **현재 실제 코드 기준** 클래스 다이어그램이다.
+
+```mermaid
+classDiagram
+    %% ===== Stats =====
+    class BigNumber {
+        <<alias: double (임시, Main.cs global using)>>
+    }
+    class StatType {
+        <<enumeration>>
+        Hp
+        Atk
+        Def
+        Recovery
+        AtkSpeed
+        CritProb
+        CritDmg
+        ArmorPen
+        Lifesteal
+        Mana
+        ManaRegen
+    }
+    class ModifierType {
+        <<enumeration>>
+        FlatAdd
+        PercentAdd
+        PercentMult
+    }
+    class StatModifier {
+        +StatType StatType
+        +ModifierType ModType
+        +BigNumber Value
+    }
+    class BaseStats {
+        +BigNumber Hp
+        +BigNumber Atk
+        +BigNumber Def
+        +BigNumber Recovery
+        +BigNumber Mana
+        +BigNumber ManaRegen
+        +Add(BaseStats) BaseStats
+    }
+    class Traits {
+        +double AtkSpeed
+        +double CritProb
+        +double CritDmg
+        +double ArmorPen
+        +double Lifesteal
+        +Add(Traits) Traits
+        +Clone() Traits
+    }
+    class FinalStats {
+        +BigNumber CurrentHp
+        +BigNumber MaxHp
+        +BigNumber Atk
+        +BigNumber Def
+        +BigNumber Recovery
+        +BigNumber CurrentMana
+        +BigNumber MaxMana
+        +BigNumber ManaRegen
+        +BigNumber AttackScaling
+        +Traits CombatTraits
+    }
+
+    %% ===== Combat =====
+    class StatusEffect {
+        +string EffectId
+        +float MaxDuration
+        +float TimeRemaining
+        +bool IsDebuff
+        +List~StatModifier~ Modifiers
+        +Tick(float) void
+        +IsExpired() bool
+        +GetModifiers() List~StatModifier~
+    }
+    class BuffManager {
+        -List~StatusEffect~ activeEffects
+        +ApplyEffect(StatusEffect) void
+        +RemoveEffect(StatusEffect) void
+        +Update(float) void
+        +GetAllActiveModifiers() List~StatModifier~
+    }
+
+    %% ===== Items =====
+    class Item {
+        <<abstract>>
+        +string InstanceId
+        +int ItemMetaId
+        +string Name
+    }
+    class Equipment {
+        <<abstract>>
+        +List~StatModifier~ BaseModifiers
+        +List~StatModifier~ RandomModifiers
+        +Modifiers List~StatModifier~
+    }
+    class Weapon {
+        +float AttackScaling
+    }
+    class Armor
+    class Accessory
+    class SlotType {
+        <<enumeration>>
+        Weapon
+        Armor
+        Accessory
+    }
+    class EquipmentInventory {
+        +Equip(Equipment, SlotType) void
+        +Unequip(SlotType) Equipment
+        +GetWeapon() Weapon
+        +GetAllModifiers() List~StatModifier~
+    }
+
+    %% ===== Entities =====
+    class Entity {
+        <<abstract>>
+        +string InstanceId
+        +int Level
+        +BaseStats BaseStats
+        +Traits BaseTraits
+        +FinalStats FinalStats
+        +BuffManager BuffManager
+        +bool IsAlive
+        +TakeDamage(BigNumber) void
+        +Update(float) void
+        +TryConsumeMana(BigNumber) bool
+        +RestoreResources() void
+        +UpdateFinalStats() void
+        #GetExtraModifiers()* List~StatModifier~
+        #GetAttackScaling() double
+    }
+    class Player {
+        +int AccountId
+        +BigNumber CurrentExp
+        +BigNumber CurrentGold
+        +EquipmentInventory Equipment
+        +AddExp(BigNumber) void
+        +AddGold(BigNumber) void
+    }
+    class Monster {
+        +int MonsterId
+        +RewardComponent Rewards
+        +List~StatModifier~ MonsterAffixes
+    }
+
+    %% ===== Systems =====
+    class BattleManager {
+        <<singleton>>
+        +CalcFinalDamage(Entity, Entity, float) BigNumber
+    }
+    class RewardComponent {
+        +BigNumber ExpDrop
+        +BigNumber GoldDrop
+        +List~DropPool~ DropTable
+        +GenerateLoot(int) LootData
+    }
+    class LootData {
+        +BigNumber TotalExp
+        +BigNumber TotalGold
+        +List~Item~ AcquiredItems
+    }
+    class LootItem {
+        +int Quantity
+    }
+    class DropPool {
+        +int ItemMetaId
+        +float DropChance
+        +int MinQty
+        +int MaxQty
+    }
+    class OfflineProgressionManager {
+        +ProcessOfflineTime(Player, Monster, int) LootData
+    }
+
+    Item <|-- Equipment
+    Item <|-- LootItem
+    Equipment <|-- Weapon
+    Equipment <|-- Armor
+    Equipment <|-- Accessory
+    Entity <|-- Player
+    Entity <|-- Monster
+    Entity *-- FinalStats
+    Entity *-- BuffManager
+    Entity o-- BaseStats
+    Entity o-- Traits
+    BuffManager o-- StatusEffect
+    Player *-- EquipmentInventory
+    EquipmentInventory o-- Weapon
+    EquipmentInventory o-- Armor
+    EquipmentInventory o-- Accessory
+    Monster *-- RewardComponent
+    RewardComponent o-- DropPool
+    RewardComponent ..> LootData : creates
+    LootData o-- Item
+    OfflineProgressionManager ..> Player : reads FinalStats
+    OfflineProgressionManager ..> Monster : reads FinalStats
+    OfflineProgressionManager ..> RewardComponent : delegates GenerateLoot
+    BattleManager ..> Entity : reads FinalStats
+```
+
+### 원본 스캐폴딩 대비 델타
+
+| 구분 | 원본(§3, 2026-07-04) | 현재(2026-07-05) | 사유 |
+|------|----------------------|-------------------|------|
+| `StatType` | 9종 | **Mana/ManaRegen 2종 추가**(11종) | 스킬 자원 게이팅 도입(`battle_system_0705.md`) |
+| `Weapon` | `float AttackRange` | **`float AttackScaling`** | 실제 구현 시 "사거리"가 아니라 "공격 배율"로 확정, 필드명도 그에 맞춰 결정 — 원본 다이어그램과의 드리프트 |
+| `FinalStats` | `CurrentHp/MaxHp/Atk/Def/Recovery` | **+ `CurrentMana/MaxMana/ManaRegen/AttackScaling`** | 마나 도입 + 코드리뷰 F1(온·오프라인 공격배율 정합성) 수정 |
+| `Entity.BaseStats/BaseTraits` | `protected` | **`public`** | 외부(몬스터 템플릿·세이브 로드)에서 설정할 경로가 전혀 없던 설계 공백 해소 |
+| `Entity` | `TakeDamage`/`UpdateFinalStats`만 있음 | **+ `IsAlive`, `TryConsumeMana`, `RestoreResources`, `GetAttackScaling`** | 전투 런타임(피해·자원·사망) 프리미티브 구현 + 코드리뷰 F5(음수 값 가드)·F6(사망 시 조기 리턴) |
+| `Monster.monsterAffixes` | `private` | **`MonsterAffixes` public init** | 외부에서 어픽스를 주입할 경로 확보 |
+| `EquipmentInventory.GetAllModifiers` | (스텁) | **병합(Sum) 없이 이어붙이기만** | 코드리뷰 F8 — 동일 소스 내 `PercentMult` 합산이 서로 다른 소스와 다르게 동작하던 불일치 제거 |
+| `RewardComponent.GenerateLoot` | (스텁) | **`ItemMetaId`별 수량 집계** | 코드리뷰 F11 — 할당량이 `killCount`가 아닌 드롭테이블 크기에 비례 |
+| `LootItem` | 없음 | **신규 `Item` 구체 타입** | `DropPool`과 동일하게, 다이어그램/스텁에 없던 최소 보완 타입 |
+| `BattleManager` | 다이어그램에 없음(당시 미정) | **`CalcFinalDamage` 구현 완료** | 이후 사이클(`be57846`)에서 추가된 전투 데미지 계산 진입점 |
+
+신규 클래스(`BattleLoop`/`Stage`/`Wave`/`MonsterSpawner`/`ReviveCostCalculator`)는 아직 코드로
+존재하지 않으며, `plan/battle_system_0705.md` §8의 다음 사이클 항목으로 남아 있다.

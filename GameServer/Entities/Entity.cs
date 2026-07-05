@@ -40,11 +40,18 @@ public abstract class Entity
 
     /// <summary>지정한 양의 피해를 받아 현재 체력을 감소시킨다.</summary>
     /// <param name="amount">받을 피해량</param>
-    /// <remarks>현재 체력은 0 미만으로 내려가지 않도록 클램프된다.</remarks>
+    /// <remarks>
+    /// 현재 체력은 0 미만으로 내려가지 않도록 클램프된다. 코드리뷰 F5: 음수 <paramref name="amount"/>가
+    /// 회복으로 작동(오버힐 포함)하지 않도록 0으로 클램프한 뒤 차감한다.
+    /// </remarks>
     public void TakeDamage(BigNumber amount)
     {
-        FinalStats.CurrentHp = Math.Max(0, FinalStats.CurrentHp - amount);
+        var safeAmount = Math.Max(0, amount);
+        FinalStats.CurrentHp = Math.Max(0, FinalStats.CurrentHp - safeAmount);
     }
+
+    /// <summary>현재 생존 여부. <see cref="Stats.FinalStats.CurrentHp"/>가 0보다 크면 true.</summary>
+    public bool IsAlive => FinalStats.CurrentHp > 0;
 
     /// <summary>
     /// 경과 시간만큼 이 엔티티의 전투 관련 상태(버프 만료·스탯 재계산·자연 회복)를 갱신한다.
@@ -55,9 +62,16 @@ public abstract class Entity
     /// <list type="bullet">
     /// <item><description><b>Thread Context:</b> 전투 갱신 루프(단일 스레드)에서 호출되는 것을 전제로 한다.</description></item>
     /// </list>
+    /// 코드리뷰 F6: 사망(<see cref="IsAlive"/>가 false) 상태에서는 버프 틱·스탯 재계산·회복을 전부
+    /// 건너뛴다. 되살리려면 <see cref="RestoreResources"/> 등으로 <c>CurrentHp</c>를 먼저 회복시켜야 한다.
     /// </remarks>
     public void Update(float deltaTime)
     {
+        if (!IsAlive)
+        {
+            return;
+        }
+
         BuffManager.Update(deltaTime);
         UpdateFinalStats();
 
@@ -70,9 +84,13 @@ public abstract class Entity
     /// </summary>
     /// <param name="amount">소모할 마나량</param>
     /// <returns>마나가 충분해 소모에 성공했으면 true, 부족해 실패했으면 false</returns>
+    /// <remarks>
+    /// 코드리뷰 F5: 음수 <paramref name="amount"/>는 마나를 증가시키는 결과로 이어지므로,
+    /// 유효하지 않은 호출로 간주해 항상 실패(false)로 처리한다.
+    /// </remarks>
     public bool TryConsumeMana(BigNumber amount)
     {
-        if (FinalStats.CurrentMana < amount)
+        if (amount < 0 || FinalStats.CurrentMana < amount)
         {
             return false;
         }
@@ -111,6 +129,10 @@ public abstract class Entity
         // BaseTraits를 참조로 그대로 대입하면 아래 그룹핑 적용이 원본 BaseTraits까지 오염시켜
         // UpdateFinalStats를 반복 호출할 때마다 특성치가 누적된다. 반드시 값 복사본을 사용한다.
         FinalStats.CombatTraits = BaseTraits.Clone();
+        // 무기 등에서 오는 공격 배율은 StatModifier 그룹핑(Flat/PercentAdd/PercentMult) 대상이 아니라
+        // 하위 타입이 직접 결정하는 값이므로 별도 훅으로 반영한다(코드리뷰 F1: 온라인 CalcFinalDamage와
+        // 오프라인 ProcessOfflineTime이 이 값을 동일하게 읽어야 정합성이 유지된다).
+        FinalStats.AttackScaling = GetAttackScaling();
 
         var modifiers = new List<StatModifier>(GetExtraModifiers());
         modifiers.AddRange(BuffManager.GetAllActiveModifiers());
@@ -184,4 +206,16 @@ public abstract class Entity
     /// </summary>
     /// <returns>하위 타입이 기여하는 <see cref="StatModifier"/> 목록</returns>
     protected abstract List<StatModifier> GetExtraModifiers();
+
+    /// <summary>
+    /// 이 엔티티의 공격력 배율(주로 장착 무기에서 기인)을 반환한다. 기본 구현은 배율 없음(1.0).
+    /// </summary>
+    /// <returns><see cref="FinalStats.AttackScaling"/>에 반영될 배율</returns>
+    /// <remarks>
+    /// 코드리뷰 F1 수정: 이전에는 무기 배율이 <see cref="Systems.BattleManager.CalcFinalDamage"/> 호출부에서
+    /// 수동으로 전달되어 <see cref="Systems.OfflineProgressionManager"/>는 이 값을 전혀 알지 못했다.
+    /// 이제 <see cref="UpdateFinalStats"/>가 이 훅으로 <see cref="FinalStats.AttackScaling"/>을 채워
+    /// 온라인·오프라인 모든 데미지 경로가 동일한 값을 읽는다.
+    /// </remarks>
+    protected virtual double GetAttackScaling() => 1.0;
 }

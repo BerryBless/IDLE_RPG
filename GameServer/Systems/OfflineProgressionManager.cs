@@ -43,12 +43,16 @@ public sealed class OfflineProgressionManager
 
         var defMult = DefenseConstant / (Math.Max(0, target.Def - attacker.CombatTraits.ArmorPen) + DefenseConstant);
         double effectiveDps = attacker.Atk
+            * attacker.AttackScaling // 코드리뷰 F1: 무기 배율 누락으로 온라인/오프라인이 어긋나던 버그 수정
             * attacker.CombatTraits.AtkSpeed
             * (1 + attacker.CombatTraits.CritProb * attacker.CombatTraits.CritDmg)
             * defMult;
 
+        // 코드리뷰 F2: 음수 offlineSeconds(시계 오차 등으로 유입될 수 있음)가 음수 killCount로
+        // 이어지지 않도록 0으로 클램프한다.
+        int safeOfflineSeconds = Math.Max(0, offlineSeconds);
         int killCount = target.MaxHp > 0 && effectiveDps > 0
-            ? (int)Math.Floor(offlineSeconds * effectiveDps / target.MaxHp)
+            ? (int)Math.Floor(safeOfflineSeconds * effectiveDps / target.MaxHp)
             : 0;
 
         return stageMonster.Rewards.GenerateLoot(killCount);

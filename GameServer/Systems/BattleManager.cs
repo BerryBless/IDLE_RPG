@@ -54,7 +54,12 @@ public sealed class BattleManager
     /// </summary>
     /// <param name="attacker">공격을 가하는 엔티티</param>
     /// <param name="target">공격을 받는 엔티티</param>
-    /// <param name="attackScaling">무기 등에서 오는 공격력 배율 (기본 1.0)</param>
+    /// <param name="attackScaling">
+    /// 이번 공격에 한해 무기 배율 위에 추가로 곱해지는 배율(예: 스킬 계수). 기본 1.0(추가 배율 없음).
+    /// 무기 등 장비에서 오는 공격력 배율은 더 이상 이 파라미터로 전달하지 않는다 — 코드리뷰 F1 수정으로
+    /// <see cref="Entities.Entity.UpdateFinalStats"/>가 <see cref="FinalStats.AttackScaling"/>에 자동 반영하므로,
+    /// 온라인(이 메서드)·오프라인(<see cref="OfflineProgressionManager"/>) 양쪽이 항상 동일한 값을 읽는다.
+    /// </param>
     /// <returns>방어력 감쇠와 치명타가 반영된 최종 데미지 (0 이상)</returns>
     /// <exception cref="ArgumentNullException"><paramref name="attacker"/> 또는 <paramref name="target"/>이 null인 경우</exception>
     /// <remarks>
@@ -70,8 +75,9 @@ public sealed class BattleManager
         FinalStats statsAttacker = attacker.FinalStats;
         FinalStats statsTarget = target.FinalStats;
 
-        // 공격 배율
-        BigNumber finalDamage = Math.Max(statsAttacker.Atk, 0) * attackScaling;
+        // 공격 배율: 무기 등에서 오는 배율(FinalStats.AttackScaling, 자동 반영)에 이번 공격 고유의
+        // 추가 배율(attackScaling 파라미터, 예: 스킬 계수)을 곱한다.
+        BigNumber finalDamage = Math.Max(statsAttacker.Atk, 0) * statsAttacker.AttackScaling * attackScaling;
 
         // 크리: CritDmg는 "추가로 곱해지는 배율"로 취급한다 (예: CritDmg=0.5 → 크리 시 1.5배).
         if (IsCritical(statsAttacker.CombatTraits.CritProb))

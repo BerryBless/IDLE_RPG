@@ -44,9 +44,19 @@ public sealed class RewardComponent
     /// </summary>
     /// <param name="killCount">처치 횟수 (오프라인 방치 시간 동안의 누적 처치 수 등)</param>
     /// <returns>산출된 보상 데이터</returns>
+    /// <remarks>
+    /// 코드리뷰 F11: kill마다 <see cref="LootItem"/>을 개별 생성하지 않고 <c>ItemMetaId</c>별로
+    /// 수량을 합산한 뒤 distinct 아이템당 1개씩만 생성한다. 이전 방식은 할당량이 <paramref name="killCount"/>에
+    /// 비례해, 오프라인 방치 시간이 길어질수록(코드리뷰 F1로 killCount가 커질 수 있음) 힙 할당이
+    /// 무제한으로 커지는 문제가 있었다. 이제 할당량은 <see cref="DropTable"/> 크기에만 비례한다.
+    /// </remarks>
     public LootData GenerateLoot(int killCount)
     {
-        var acquiredItems = new List<Items.Item>();
+        // 코드리뷰 F3: 음수 killCount(호출측 계산 오류 등으로 유입될 수 있음)가 음수 경험치/골드를
+        // 반환하지 않도록 0으로 클램프한다.
+        killCount = Math.Max(0, killCount);
+
+        var quantityByItemMetaId = new Dictionary<int, int>();
 
         for (int kill = 0; kill < killCount; kill++)
         {
@@ -57,13 +67,19 @@ public sealed class RewardComponent
                     continue;
                 }
 
-                int quantity = pool.MinQty == pool.MaxQty
+                // 코드리뷰 F4: MinQty > MaxQty(마스터 데이터 오류)여도 Random.Next가 예외를 던지지
+                // 않도록 >=로 완화하고, 이 경우 MinQty를 그대로 사용한다.
+                int quantity = pool.MinQty >= pool.MaxQty
                     ? pool.MinQty
                     : _random.Next(pool.MinQty, pool.MaxQty + 1); // Next(min, maxExclusive) → MaxQty 포함하려면 +1
 
-                acquiredItems.Add(new LootItem { ItemMetaId = pool.ItemMetaId, Quantity = quantity });
+                quantityByItemMetaId[pool.ItemMetaId] = quantityByItemMetaId.GetValueOrDefault(pool.ItemMetaId) + quantity;
             }
         }
+
+        var acquiredItems = quantityByItemMetaId
+            .Select(kv => (Items.Item)new LootItem { ItemMetaId = kv.Key, Quantity = kv.Value })
+            .ToList();
 
         return new LootData
         {

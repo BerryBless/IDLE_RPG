@@ -1,3 +1,4 @@
+using GameServer.Combat;
 using GameServer.Entities;
 using GameServer.Stats;
 
@@ -102,5 +103,79 @@ public class EntityRuntimeTests
 
         Assert.False(result);
         Assert.Equal(50, player.FinalStats.CurrentMana);
+    }
+
+    [Fact]
+    public void TakeDamage_NegativeAmount_DoesNotHealEntity()
+    {
+        // 코드리뷰 F5: 음수 피해량이 회복으로 작동하지 않도록 방어.
+        var player = MakeReadyPlayer();
+        player.TakeDamage(30); // CurrentHp = 70
+
+        player.TakeDamage(-1000);
+
+        Assert.Equal(70, player.FinalStats.CurrentHp);
+    }
+
+    [Fact]
+    public void TryConsumeMana_NegativeAmount_FailsAndDoesNotGrantMana()
+    {
+        // 코드리뷰 F5: 음수 소모량이 마나 증가로 작동하지 않도록 방어.
+        var player = MakeReadyPlayer();
+
+        var result = player.TryConsumeMana(-100);
+
+        Assert.False(result);
+        Assert.Equal(50, player.FinalStats.CurrentMana);
+    }
+
+    [Fact]
+    public void IsAlive_ReflectsCurrentHp()
+    {
+        var player = MakeReadyPlayer();
+        Assert.True(player.IsAlive);
+
+        player.TakeDamage(9999);
+
+        Assert.False(player.IsAlive);
+    }
+
+    [Fact]
+    public void Update_DeadEntity_DoesNotRegenerateHpOrMana()
+    {
+        // 코드리뷰 F6: 사망한 개체는 회복/마나재생이 멈춰야 한다.
+        var player = MakeReadyPlayer();
+        player.TakeDamage(9999); // CurrentHp = 0
+
+        player.Update(10f); // Recovery=5, ManaRegen=10이 살아있었다면 크게 회복했을 시간
+
+        Assert.Equal(0, player.FinalStats.CurrentHp);
+        Assert.Equal(50, player.FinalStats.CurrentMana); // RestoreResources 시점 그대로, 재생 없음
+    }
+
+    [Fact]
+    public void Update_DeadEntity_DoesNotTickBuffs()
+    {
+        // 코드리뷰 F6: 사망한 개체는 버프 만료 처리도 멈춰야 한다(전체 조기 리턴).
+        var player = MakeReadyPlayer();
+        var effect = new StatusEffect { EffectId = "buff", MaxDuration = 1f, TimeRemaining = 1f };
+        player.BuffManager.ApplyEffect(effect);
+        player.TakeDamage(9999); // CurrentHp = 0
+
+        player.Update(5f); // 살아있었다면 버프가 만료되고도 남을 시간
+
+        Assert.Equal(1f, effect.TimeRemaining, precision: 5);
+    }
+
+    [Fact]
+    public void Update_AliveEntity_StillRegeneratesAsBefore()
+    {
+        // 회귀 확인: 조기 리턴 가드가 생존 개체의 기존 동작을 건드리지 않는지.
+        var player = MakeReadyPlayer();
+        player.TakeDamage(50); // CurrentHp = 50
+
+        player.Update(1f);
+
+        Assert.Equal(55, player.FinalStats.CurrentHp);
     }
 }

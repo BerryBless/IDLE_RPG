@@ -28,6 +28,14 @@ public sealed class Player : Entity
     /// </remarks>
     protected override List<StatModifier> GetExtraModifiers() => [.. Equipment.GetAllModifiers()];
 
+    /// <summary>장착 무기의 공격 배율을 반환한다. 무기 미착용 시 1.0(배율 없음).</summary>
+    /// <returns>장착 무기의 <see cref="Items.Weapon.AttackScaling"/>, 없으면 1.0</returns>
+    /// <remarks>
+    /// 코드리뷰 F1 수정 전에는 호출부(Main.cs 등)가 <c>?? 0</c>으로 무기 미착용 시 배율을 0으로
+    /// 취급해 맨손 공격이 데미지 0이 되는 부수적 결함이 있었다. 기본값 1.0으로 해소한다.
+    /// </remarks>
+    protected override double GetAttackScaling() => Equipment.GetWeapon()?.AttackScaling ?? 1.0;
+
     /// <summary>경험치를 획득하여 <see cref="CurrentExp"/>에 누적한다.</summary>
     /// <param name="amount">획득한 경험치량</param>
     public void AddExp(BigNumber amount) => CurrentExp += amount;
