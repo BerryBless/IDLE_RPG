@@ -1,0 +1,223 @@
+# 전투 플로우 설계 — 하이브리드 모델 (실시간 틱 + 오프라인 수식)
+
+## 1. 배경 및 목적
+
+사용자가 "몬스터 조우 → 전투 → 전리품 획득 → 몬스터 조우"를 큰 흐름으로 하는 mermaid `flowchart`를
+제시했다. 다이어그램 자체는 웨이브/보스/실패 분기를 갖춘 실시간 전투 루프를 담고 있었으나,
+`IDLE_RPG`가 **방치형(Idle) 서버 게임**이라는 전제와 대조하면 다음이 비어 있었다:
+
+- 오프라인/자동 진행 경로 부재 (방치형의 핵심)
+- 전투 연산 모델(실시간 틱 vs 수식) 미정의
+- 전투 밖 성장 루프 부재 → 실패 시 무한 루프
+- 실패 처리 규칙(강등 vs 부활) 모호, 스킬 자원 게이팅 미정, 다중 대상 미고려
+
+기존 코드(`GameServer/`)에는 이미 `OfflineProgressionManager.ProcessOfflineTime`,
+`RewardComponent.GenerateLoot(int killCount)` 같은 **킬수/시간 기반 수식 스텁**과,
+`BattleManager.CalcFinalDamage`(구현 완료), `BuffManager.Update(deltaTime)`,
+`Entity.Update(deltaTime)` 같은 **실시간 틱 스텁**이 공존한다. 즉 설계 의도 자체가
+"온라인=실시간 틱, 오프라인=수식"의 하이브리드였다는 것이 코드에서 드러난다.
+
+이번 사이클의 목적은 사용자 제시 플로우차트를 이 하이브리드 모델에 맞춰 **완성형 다이어그램으로
+보강**하고, 구현 전 반드시 확정해야 할 설계 결정(실패 처리, 스킬 자원, 자동전투 여부)을 고정하는
+것이다. 실제 Stage/Wave/Boss/Spawner 클래스 구현은 다음 사이클로 미룬다.
+
+## 2. 설계 결정
+
+| 항목 | 채택안 | 대안 | 사유 |
+|------|--------|------|------|
+| 연산 모델 | **하이브리드**(온라인 실시간 틱 / 오프라인 수식, 동일 파라미터로 정합성 유지) | 완전 실시간 틱만 / 완전 수식만 | 기존 코드가 이미 두 경로(`BattleManager`+`Entity.Update` vs `OfflineProgressionManager`)를 스텁으로 갖고 있어, 한쪽만 채택하면 다른 절반이 죽은 코드가 됨. 온라인 정밀도와 오프라인 서버 부하 절감을 동시에 취함 |
+| 실패 처리 | **제자리 부활(코스트 지불)**, 강등 없음 | 이전 스테이지 강등 / 조건별 분기(일반=부활, 보스=재시작) | 방치형에서 강등은 스트레스 요인이 큼. 부활 코스트(골드/쿨다운)로 실패에 비용을 부여하되 진행도는 보존해 재도전 유도 |
+| 스킬 자원 | **쿨타임 + 마나** | 쿨타임만 | 자원 게이팅이 있어야 스킬 사용 판단(`t2` 분기)에 의미가 생김. 단, 현재 `StatType` enum에 마나가 없어 후속 스탯 확장 필요(§7) |
+| 자동 전투 | **완전 자동**, 유저 개입 없음 | 자동+수동 스킬 발동 옵션 | 온라인/오프라인 결과 정합성을 지키려면 유저 개입 변수를 배제하는 편이 수식과의 대응이 단순함. 액티브 플레이 보상은 후속 사이클 검토 |
+
+## 3. 완성형 다이어그램
+
+```mermaid
+flowchart TB
+    %% ===== 세션 계층 =====
+    A([앱 시작 / 포그라운드 복귀]) --> B{오프라인 경과 있음?}
+    B -- Yes --> OFF["오프라인 정산 (수식)<br/>ProcessOfflineTime(마지막 스테이지, 경과초)<br/>killCount = f(DPS, 몬스터HP, Δt)<br/>누적 LootData → Player 반영"]
+    B -- No --> ON([온라인 진입])
+    OFF --> ON
+
+    ON --> n0["스테이지 진입<br/>마지막 도달 스테이지 로드"]
+    n0 --> s1
+
+    %% ===== 온라인 실시간 전투 (틱 시뮬레이션) =====
+    subgraph ONLINE [온라인 실시간 전투 · 완전 자동 · 틱 시뮬레이션]
+        direction TB
+
+        s1["웨이브 스폰<br/>(다중 몬스터 N마리)"]
+
+        subgraph LOOP [전투 틱 루프 · deltaTime 구동]
+            direction TB
+            t0["Δt 진행 (deltaTime)"]
+            t1["쿨타임 · 공속 · 마나 회복 갱신"]
+            t2{"행동 선택<br/>마나 충분 & 스킬 쿨 완료?"}
+            t3s["스킬 자동 시전<br/>(마나 소모)"]
+            t3a["평타<br/>(공속 쿨 소모)"]
+            t4["피해량 연산<br/>CalcFinalDamage (스탯 + 버프/디버프)"]
+            t5["버프/디버프 지속시간 · DoT 갱신<br/>BuffManager.Update(Δt)"]
+            c1{"캐릭터 파티 전멸?"}
+            c2{"몬스터 전멸?"}
+
+            t0 --> t1 --> t2
+            t2 -- Yes --> t3s
+            t2 -- No --> t3a
+            t3s --> t4
+            t3a --> t4
+            t4 --> t5 --> c1
+            c1 -- 생존 --> c2
+            c2 -- 일부 생존 --> t0
+        end
+
+        s1 --> LOOP
+
+        c1 -- 전멸 --> FAIL
+        c2 -- "전멸(처치)" --> r1["일반 보상 획득<br/>골드 / 경험치 / 아이템 드롭(DropTable)"]
+        r1 --> r2["경험치 누적 → 레벨업 판정<br/>(캐릭터 레벨 · 스탯 상승, 스테이지 등반과 별개)"]
+        r2 --> w1{"보스 등장 조건?<br/>(웨이브 N/N 완료)"}
+
+        w1 -- No --> s1
+        w1 -- Yes --> b1["보스 스폰<br/>(제한 시간 타이머 부여)"]
+
+        b1 --> BLOOP["보스전 틱 루프<br/>(LOOP와 동일 + 제한시간 감소)"]
+        BLOOP --> b2{"제한 시간 내 처치?"}
+        b2 -- "실패(타임아웃/전멸)" --> FAIL
+        b2 -- 성공 --> b3["보스 특수 보상 획득"]
+        b3 --> b4["스테이지 등반 (Stage +1)"]
+    end
+
+    %% ===== 실패 & 성장 루프 (전투 밖) =====
+    subgraph GROW [실패 처리 & 성장 · 강등 없음]
+        direction TB
+        FAIL["전투 실패"]
+        FAIL --> f1["제자리 부활<br/>부활 코스트 지불 (골드/재화 또는 쿨다운)"]
+        f1 --> g1{"성장 개입?<br/>(선택 · 유저 수동)"}
+        g1 -- Yes --> g2["장비 강화 / 스탯 투자 / 스킬 업그레이드<br/>(재화 · 경험치 소모)"]
+        g2 --> RETRY([같은 스테이지 재도전])
+        g1 -- No --> RETRY
+    end
+
+    b4 --> n0
+    RETRY --> s1
+
+    %% ===== 이탈 → 오프라인 =====
+    ONLINE -. "앱 종료 / 백그라운드 (언제든)" .-> EXIT["상태 저장<br/>(진행도 · 마지막 스테이지 persist)"]
+    EXIT --> WAIT([오프라인 타이머 시작])
+    WAIT -.-> A
+```
+
+### 원본 대비 보강 요약
+
+| # | 원본의 부족한 점 | 완성형에서 보강 |
+|---|------------------|-----------------|
+| 1 | 오프라인/방치 경로 없음 | 세션 계층 추가: `오프라인 정산(수식)` ↔ `이탈→저장→타이머` |
+| 2 | `s2` 행동 주체 불명 | **완전 자동** — `t2` 행동 선택(스킬 vs 평타)을 서버 AI가 결정 |
+| 3 | 실패 후 무한 루프(성장 없음) | `GROW` 서브그래프: 부활 코스트 → 성장(강화/투자/업글) → 재도전 |
+| 4 | 실시간/수식 모델 미정의 | 하이브리드 명시 + 정합성 원칙(§4) |
+| 5 | 시간(Δt) 진행 지점 없음 | `t0 Δt 진행`을 루프 헤드에 고정, 보스전 제한시간 감소 |
+| 6 | 단일 대상 가정 | `웨이브 N마리` + 생존 판정을 **전멸 판정**(`c1`/`c2`)으로 |
+| 7 | 버프/디버프 관리 없음 | `t5 BuffManager.Update` — 지속시간·DoT 갱신 |
+| 8 | 스킬 자원 없음 | **마나** 회복(`t1`)·게이팅(`t2`)·소모(`t3s`) |
+| 9 | 보상=골드/경험치만 | 아이템 드롭(`DropTable`) 추가 |
+| 10 | 레벨업 vs 등반 혼재 | `r2 레벨업`(캐릭터)과 `b4 등반`(스테이지) 분리 |
+| 11 | `s_fail` 강등/부활 OR 애매 | **제자리 부활**로 단일화, 강등 제거 |
+| 12 | `\n` 렌더 불가(mermaid는 `<br/>` 필요) | 전부 `<br/>`로 교체 |
+
+## 4. 컴포넌트 구조 (다음 사이클 구현 대상)
+
+다이어그램의 각 노드가 요구하는 신규/확장 컴포넌트. 이번 사이클은 설계만 확정하며,
+아래 트리는 실제 파일이 아니라 **다음 구현 사이클의 청사진**이다.
+
+```
+GameServer/
+├─ Stats/
+│  └─ StatType.cs        (기존 enum에 Mana/MaxMana 추가 필요 — §7)
+├─ Combat/
+│  ├─ BuffManager.cs      (기존, Update(deltaTime) 실구현 대상)
+│  └─ StatusEffect.cs     (기존, Tick 실구현 대상)
+├─ Entities/
+│  └─ Entity.cs           (기존, Update(deltaTime)/TakeDamage 실구현 대상)
+├─ Systems/
+│  ├─ BattleManager.cs    (기존, CalcFinalDamage 구현 완료 — 틱 루프에서 t4 호출)
+│  ├─ OfflineProgressionManager.cs (기존, ProcessOfflineTime 실구현 대상)
+│  ├─ RewardComponent.cs  (기존, GenerateLoot 실구현 대상)
+│  ├─ BattleLoop.cs       (신규) — 온라인 틱 루프 스케줄러 (t0~c2), deltaTime 구동
+│  ├─ Stage.cs            (신규) — 스테이지 번호, 웨이브 목록, 보스 조건(N/N), 제한시간
+│  ├─ Wave.cs              (신규) — 웨이브당 몬스터 스폰 목록
+│  ├─ MonsterSpawner.cs   (신규) — 웨이브/보스 스폰 팩토리
+│  └─ ReviveCostCalculator.cs (신규) — 부활 코스트 공식 (§7 미결)
+```
+
+**의존 관계:** `BattleLoop`가 `BattleManager`(피해량)·`BuffManager`(상태이상)·`Entity`(생사 판정)를
+구동하고, 결과를 `RewardComponent`에 위임한다. `OfflineProgressionManager`는 `BattleLoop`와
+동일한 DPS/HP 파라미터를 참조해 오프라인 수식 결과가 온라인 시뮬레이션과 어긋나지 않도록 한다.
+
+## 5. 핵심 API (제안, 다음 사이클 구현)
+
+```csharp
+namespace GameServer.Systems;
+
+/// <summary>
+/// 온라인 상태에서 스테이지 하나의 실시간 전투를 deltaTime 단위로 진행시키는 자동 전투 루프.
+/// </summary>
+/// <remarks>
+/// <b>[성능 및 동시성 제약 조건]</b>
+/// - Thread Context: 게임 서버의 틱 스케줄러 스레드에서 호출됨. 동기 블로킹(DB/File I/O) 금지.
+/// - Memory Policy: 웨이브당 몬스터 리스트는 풀링 검토 대상(§7).
+/// - Concurrency: 플레이어별 단일 BattleLoop 인스턴스 가정, 외부 동기화 불필요.
+/// </remarks>
+public sealed class BattleLoop
+{
+    public void Tick(float deltaTime) => throw new NotImplementedException();
+}
+```
+
+```csharp
+namespace GameServer.Systems;
+
+/// <summary>
+/// 오프라인 경과 시간을 킬수 기반 수식으로 정산해 누적 보상을 계산한다.
+/// 온라인 BattleLoop와 동일한 DPS/몬스터HP 파라미터를 사용해 정합성을 유지해야 한다.
+/// </summary>
+public sealed class OfflineProgressionManager
+{
+    public LootData ProcessOfflineTime(Player player, Monster stageMonster, int offlineSeconds)
+        => throw new NotImplementedException();
+}
+```
+
+## 6. 변경 파일 목록
+
+**이번 사이클 (설계만):**
+- 신규: `plan/battle_system_0705.md` (본 문서)
+
+**다음 구현 사이클 예정 (신규):**
+- `Systems/BattleLoop.cs`, `Systems/Stage.cs`, `Systems/Wave.cs`,
+  `Systems/MonsterSpawner.cs`, `Systems/ReviveCostCalculator.cs`
+
+**다음 구현 사이클 예정 (수정 — 기존 스텁 실구현):**
+- `Systems/BattleManager.cs` 호출부 연결, `Systems/OfflineProgressionManager.cs`,
+  `Systems/RewardComponent.cs`, `Combat/BuffManager.cs`, `Combat/StatusEffect.cs`,
+  `Entities/Entity.cs`, `Stats/StatType.cs`(Mana 추가)
+
+## 7. 빌드 검증
+
+이번 사이클은 설계 문서 작성만 포함하며 코드 변경이 없으므로 빌드 검증 대상 없음.
+다음 구현 사이클에서 위 파일들이 추가/수정되면:
+
+```powershell
+dotnet build GameServer/GameServer.csproj
+dotnet run --project GameServer/GameServer.csproj
+```
+
+## 8. 향후 확장 포인트 (미결 사항)
+
+- 부활 코스트 공식 확정 (골드 지수 증가 vs 고정 쿨다운) — `ReviveCostCalculator`
+- 오프라인 수식 `f(DPS, 몬스터HP, Δt)`의 정확한 정의와, 온라인 틱 시뮬레이션 결과와의
+  정합성 검증 방법(예: 동일 시드로 양쪽 결과 비교 테스트)
+- `StatType` enum에 `Mana`/`MaxMana` 추가 여부 및 회복 공식
+- 웨이브당 몬스터 수·보스 조건(`N/N`)을 스테이지별로 가변화하는 데이터 스키마(JSON/ScriptableObject 등)
+- 멀티플레이 접점 (본 설계는 싱글 플레이 범위로 한정)
+- 액티브 플레이 보상(수동 개입 시 추가 보상) 도입 여부 — 완전 자동 채택으로 이번 사이클엔 배제
