@@ -54,11 +54,11 @@ flowchart TB
             t0["Δt 진행 (deltaTime)"]
             t1["쿨타임 · 공속 · 마나 회복 갱신<br/>*마나 재생 프리미티브 구현됨: Entity.Update*"]
             t2{"행동 선택<br/>마나 충분 & 스킬 쿨 완료?<br/>*게이팅 프리미티브 구현됨: Entity.TryConsumeMana*"}
-            t3s["스킬 자동 시전<br/>(마나 소모)<br/>*스킬 선택·발동 루프 자체는 BattleLoop 신규 구현 대상(다음 사이클)*"]
-            t3a["평타<br/>(공속 쿨 소모)"]
+            t3s["스킬 자동 시전<br/>(마나 소모)<br/>*스킬 정의·선택 로직은 여전히 다음 사이클: BattleLoop.Tick은 현재 평타(t3a)만 수행*"]
+            t3a["평타<br/>(공속 쿨 소모)<br/>*BattleLoop.Tick 구현됨 — 단, 공속 쿨타임 없이 매 틱 1회 라운드제 교환으로 단순화*"]
             t4["피해량 연산<br/>CalcFinalDamage (스탯 + 버프/디버프)<br/>*장비 PercentMult 소스 무관 독립 곱연산(코드리뷰 F8 수정)*"]
             t5["버프/디버프 지속시간 갱신<br/>BuffManager.Update(Δt) — 구현됨<br/>*DoT(지속 피해)는 후속 사이클: 현재 StatusEffect는 스탯 모디파이어 부여만 지원*"]
-            c1{"캐릭터 파티 전멸?<br/>*개별 Entity 사망(CurrentHp 0 이하) 시 Update 전체 정지(코드리뷰 F6, Entity.IsAlive) — 파티 전멸 판정 자체는 BattleLoop 신규 구현 대상*"}
+            c1{"캐릭터 파티 전멸?<br/>*BattleLoop.Tick 구현됨(GameServer/Systems/BattleLoop.cs) — 단, 단일 플레이어 대상이라 '파티' 개념 없음.<br/>사망 시 FAIL/GROW로 분기하지 않고 즉시 무료 부활로 단순화(부활 코스트는 여전히 다음 사이클)*"}
             c2{"몬스터 전멸?"}
 
             t0 --> t1 --> t2
@@ -130,11 +130,20 @@ flowchart TB
 `GameServer.Tests`(41개 테스트)로 검증됨. `t3s`의 스킬 발동 루프 자체, `s1/b1/w1/b4`(웨이브·보스·스폰·등반),
 DoT는 여전히 다음 사이클 대상.
 
+**구현 완료 갱신(2026-07-05 BattleLoop 사이클):** `t0`~`c2`의 라운드제 골격(`GameServer/Systems/BattleLoop.cs`)이
+구현되어 `Main.cs`가 실제로 무한히 반복 실행된다. 단, 스코프를 의도적으로 좁혔다 —
+단일 플레이어 vs 단일 몬스터(웨이브·다중 몬스터 없음), 공속 쿨타임 없이 매 틱 1회 라운드제 교환
+(`t3s` 스킬 분기 없이 항상 `t3a` 평타만), 몬스터 처치 시 같은 인스턴스가 `RestoreResources()`로
+즉시 재등장(`MonsterSpawner` 없음), 플레이어 사망 시 `FAIL`/`GROW` 서브그래프 대신 즉시 무료
+부활로 단순화(부활 코스트는 여전히 미구현). `s1/b1/w1/b4`(웨이브·보스·스폰·등반)와 `t3s`(스킬)는
+여전히 다음 사이클 대상.
+
 ## 4. 컴포넌트 구조
 
 다이어그램의 각 노드가 요구하는 컴포넌트. **2026-07-05 TDD 사이클에서 스텁 구현이 완료**된 항목은
-"구현됨"으로 표시. `BattleLoop`/`Stage`/`Wave`/`MonsterSpawner`/`ReviveCostCalculator`는 여전히
-**다음 구현 사이클의 청사진**(실제 파일 아님).
+"구현됨"으로 표시. `BattleLoop`은 2026-07-05 후속 사이클에서 스코프를 좁혀 구현 완료(아래 참고).
+`Stage`/`Wave`/`MonsterSpawner`/`ReviveCostCalculator`는 여전히 **다음 구현 사이클의 청사진**
+(실제 파일 아님).
 
 ```
 GameServer/
@@ -170,7 +179,9 @@ GameServer/
 │  ├─ RewardComponent.cs  — 구현됨. GenerateLoot(킬수·드롭테이블 확률 롤), 결정적 RNG 주입 생성자 추가.
 │  │                        코드리뷰 F3(음수 killCount 클램프)·F4(MinQty>MaxQty 방어) 수정
 │  ├─ LootItem.cs         — 신규(Item 구체 타입 부재로 추가, DropPool과 동일한 보완 패턴)
-│  ├─ BattleLoop.cs       (신규 예정) — 온라인 틱 루프 스케줄러 (t0~c2), deltaTime 구동
+│  ├─ BattleLoop.cs       — 구현됨(스코프 축소판). 단일 Player vs 단일 Monster 라운드제 무한 루프.
+│  │                        Tick(내부, 단위 테스트 대상)/Run(공개, CancellationToken 없으면 진짜 무한)로 분리.
+│  │                        웨이브·스킬·부활 코스트는 미구현 — 아래 Stage 이하와 동일하게 다음 사이클 대상
 │  ├─ Stage.cs            (신규 예정) — 스테이지 번호, 웨이브 목록, 보스 조건(N/N), 제한시간
 │  ├─ Wave.cs              (신규 예정) — 웨이브당 몬스터 스폰 목록
 │  ├─ MonsterSpawner.cs   (신규 예정) — 웨이브/보스 스폰 팩토리
@@ -185,25 +196,49 @@ tests/
 
 ## 5. 핵심 API
 
-**`BattleLoop`(다음 사이클 제안, 미구현):**
+**`BattleLoop`(2026-07-05 구현 완료 — `GameServer/Systems/BattleLoop.cs`, 스코프 축소판):**
 
 ```csharp
 namespace GameServer.Systems;
 
-/// <summary>
-/// 온라인 상태에서 스테이지 하나의 실시간 전투를 deltaTime 단위로 진행시키는 자동 전투 루프.
-/// </summary>
-/// <remarks>
-/// <b>[성능 및 동시성 제약 조건]</b>
-/// - Thread Context: 게임 서버의 틱 스케줄러 스레드에서 호출됨. 동기 블로킹(DB/File I/O) 금지.
-/// - Memory Policy: 웨이브당 몬스터 리스트는 풀링 검토 대상(§8).
-/// - Concurrency: 플레이어별 단일 BattleLoop 인스턴스 가정, 외부 동기화 불필요.
-/// </remarks>
+public enum BattleTickEvent { None, MonsterDefeated, PlayerDefeated }
+
 public sealed class BattleLoop
 {
-    public void Tick(float deltaTime) => throw new NotImplementedException();
+    // 1회 교환(순수 로직, sleep/취소 없음) — 단위 테스트 대상이라 internal로 노출
+    internal BattleTickEvent Tick(Player player, Monster monster, float deltaTime)
+    {
+        player.Update(deltaTime);
+        monster.Update(deltaTime);
+
+        monster.TakeDamage(BattleManager.Instance.CalcFinalDamage(player, monster));
+        if (!monster.IsAlive)
+        {
+            var loot = monster.Rewards.GenerateLoot(1);
+            player.AddExp(loot.TotalExp);
+            player.AddGold(loot.TotalGold);
+            monster.RestoreResources(); // 같은 인스턴스로 즉시 재등장 — MonsterSpawner 없음
+            return BattleTickEvent.MonsterDefeated;
+        }
+
+        player.TakeDamage(BattleManager.Instance.CalcFinalDamage(monster, player));
+        if (!player.IsAlive)
+        {
+            player.RestoreResources(); // 즉시 무료 부활 — ReviveCostCalculator는 다음 사이클
+            return BattleTickEvent.PlayerDefeated;
+        }
+
+        return BattleTickEvent.None;
+    }
+
+    // cancellationToken 미전달(기본값) 시 취소 불가 → 진짜 무한 루프. Main.cs는 토큰 없이 호출한다.
+    public void Run(Player player, Monster monster, TimeSpan? tickInterval = null,
+        CancellationToken cancellationToken = default) { /* Tick 반복 + Thread.Sleep */ }
 }
 ```
+
+`t3s`(스킬 자동 시전)는 정의된 스킬 체계 자체가 없어 여전히 미구현이라, `Tick`은 항상 평타(`t3a`)만
+수행한다. 공속(`AtkSpeed`) 기반 쿨타임도 아직 없어 매 틱 1회 라운드제 교환으로 단순화했다.
 
 **`OfflineProgressionManager`(이번 사이클 구현 완료 — `GameServer/Systems/OfflineProgressionManager.cs`):**
 
@@ -267,9 +302,16 @@ public LootData ProcessOfflineTime(Player player, Monster stageMonster, int offl
 - 신규 `tests/GameServer.Tests/Items/EquipmentInventoryTests.cs` + 기존 테스트 파일에 회귀
   테스트 8건 추가/수정(총 58개 통과)
 
+**2026-07-05 BattleLoop 사이클 완료 (신규/수정):**
+- 신규 `GameServer/Systems/BattleLoop.cs`: 단일 Player vs 단일 Monster 라운드제 무한 루프
+  (`Tick`은 internal 순수 로직, `Run`은 `CancellationToken` 미전달 시 진짜 무한 루프)
+- 신규 `tests/GameServer.Tests/Systems/BattleLoopTests.cs`(4개 — 처치/생존/사망부활/취소 케이스)
+- `GameServer/Main.cs`: 예제에 `BaseStats.Hp`(플레이어 100·몬스터 30) + `Def`(몬스터 5) 부여,
+  `RestoreResources()` 호출 추가, 1회성 `CalcFinalDamage` 호출을 `new BattleLoop().Run(player, monster)`로 교체
+
 **다음 구현 사이클 예정 (신규, 미착수):**
-- `Systems/BattleLoop.cs`, `Systems/Stage.cs`, `Systems/Wave.cs`,
-  `Systems/MonsterSpawner.cs`, `Systems/ReviveCostCalculator.cs`
+- `Systems/Stage.cs`, `Systems/Wave.cs`, `Systems/MonsterSpawner.cs`, `Systems/ReviveCostCalculator.cs`
+- 스킬 정의 체계 + `BattleLoop.Tick`의 `t3s`(스킬 자동 시전) 분기, `AtkSpeed` 기반 실시간 쿨타임
 
 ## 7. 빌드 검증
 
@@ -284,10 +326,19 @@ dotnet run --project GameServer/GameServer.csproj
 (`total damage = 99` 유지 — 무기 배율 적용 메커니즘은 수동 파라미터 전달에서
 `FinalStats.AttackScaling` 자동 반영으로 바뀌었으나 결과값은 동일).
 
+**실행 결과(2026-07-05, BattleLoop 사이클):** 솔루션 전체 0 warning / 0 error. `GameServer.Tests`
+63/63 통과(F6/F8/F11까지의 58개 + `BattleLoopTests` 4개 + 기존 테스트 조정 반영). 기존
+`IdleRpg.HarnessTests` 98/98 영향 없음. `Main.cs`는 더 이상 1회성 `total damage` 출력이 아니라
+`BattleLoop.Run`으로 무한 반복되며, 실제로 몇 초간 실행해 몬스터 처치·재등장·경험치/골드 누적
+로그가 계속 출력되는 것을 육안으로 확인함(Ctrl+C로 종료).
+
 ## 8. 향후 확장 포인트 (미결 사항)
 
 - 부활 코스트 공식 확정 (골드 지수 증가 vs 고정 쿨다운) — `ReviveCostCalculator`
-- `BattleLoop`/`Stage`/`Wave`/`MonsterSpawner`: 웨이브·보스 스폰, 스킬 자동 선택·발동(`t3s`), DoT(지속 피해) 실행 루프
+- `Stage`/`Wave`/`MonsterSpawner`: 웨이브·보스 스폰(현재 `BattleLoop`은 단일 몬스터 재등장뿐),
+  스킬 자동 선택·발동(`t3s`), `AtkSpeed` 기반 실시간 쿨타임, DoT(지속 피해) 실행 루프
+- 루팅된 `AcquiredItems`를 저장할 플레이어 인벤토리(현재 `Player`는 `Equipment`만 있고 일반
+  아이템 보관소가 없어, `BattleLoop`은 콘솔 로그만 출력하고 저장하지 않음)
 - 웨이브당 몬스터 수·보스 조건(`N/N`)을 스테이지별로 가변화하는 데이터 스키마(JSON/ScriptableObject 등)
 - `BigNumber` struct 활성화(현재 `double` 별칭) 시 `EquipmentInventory`/`Entity` 등 연쇄 영향 검토
 - 아이템 마스터 데이터 조회 시스템(`LootItem`을 실제 `Weapon`/`Armor`/`Accessory`로 구체화)
