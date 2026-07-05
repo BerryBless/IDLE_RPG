@@ -7,4 +7,10 @@
         <Nullable>enable</Nullable>
     </PropertyGroup>
 
+    <ItemGroup>
+        <!-- GameServer.Tests가 internal 생성자(예: BattleManager(Random), RewardComponent(Random))를 통해
+             결정적 RNG를 주입할 수 있도록 테스트 어셈블리에 internal 가시성을 부여한다. -->
+        <InternalsVisibleTo Include="GameServer.Tests" />
+    </ItemGroup>
+
 </Project>

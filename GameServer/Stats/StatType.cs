@@ -28,5 +28,11 @@ public enum StatType
     ArmorPen,
 
     /// <summary>흡혈률.</summary>
-    Lifesteal
+    Lifesteal,
+
+    /// <summary>최대 마나. 스킬 사용에 소모되는 자원의 총량.</summary>
+    Mana,
+
+    /// <summary>초당 마나 재생량.</summary>
+    ManaRegen
 }

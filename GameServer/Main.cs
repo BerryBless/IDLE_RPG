@@ -6,8 +6,8 @@ using GameServer.Stats;
 using GameServer.Systems;
 
 
-// 도메인 타입 구성 예시. 각 클래스는 아직 스켈레톤(메서드 본문 NotImplementedException) 단계이므로
-// 여기서는 인스턴스 생성과 구조 연결만 시연하고, 실제 로직 메서드는 호출하지 않는다.
+// 도메인 타입 구성 예시. 2026-07-05 TDD 사이클에서 스탯 집계·전투·보상 로직이 실구현되어,
+// 이제 UpdateFinalStats()/CalcFinalDamage() 등 실제 로직 메서드를 호출하는 예제다.
 
 var player = new Player
 {
@@ -59,5 +59,7 @@ var armor = new Armor
 player.Equipment.Equip(weapon, SlotType.Weapon);
 player.Equipment.Equip(armor, SlotType.Armor);
 player.UpdateFinalStats();
-var FinalDamage = BattleManager.Instance.CalcFinalDamage(player, monster, player.Equipment.GetWeapon()?.AttackScaling ?? 0);
+// 무기의 AttackScaling은 UpdateFinalStats() 호출 시 FinalStats.AttackScaling에 자동 반영되므로
+// (코드리뷰 F1 수정) 더 이상 호출부에서 수동으로 전달할 필요가 없다.
+var FinalDamage = BattleManager.Instance.CalcFinalDamage(player, monster);
 Console.WriteLine($"total damage = {FinalDamage}");

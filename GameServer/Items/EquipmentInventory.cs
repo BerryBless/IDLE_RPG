@@ -101,39 +101,33 @@ public sealed class EquipmentInventory
 
     /// <summary>모든 착용 장비의 스탯 수정치를 합쳐 반환한다.</summary>
     /// <returns>착용 중인 전체 <see cref="StatModifier"/> 목록</returns>
+    /// <remarks>
+    /// 코드리뷰 F8: 이전에는 여기서 동일 StatType+ModType 모디파이어를 <c>GroupBy+Sum</c>으로
+    /// 미리 합산했다. Flat/PercentAdd는 합산이 결합법칙을 만족해 결과가 같았지만,
+    /// <see cref="ModifierType.PercentMult"/>는 <c>(1+Σv)</c>(가산 후 병합)와 <c>Π(1+v_i)</c>(개별 곱연산)가
+    /// 서로 다른 값이 되어 "장비 내부는 가산, 서로 다른 소스 간은 곱연산"이라는 불일치를 만들었다.
+    /// <see cref="Entities.Entity.UpdateFinalStats"/>가 이미 StatType별로 이 세 연산을 올바르게
+    /// 수행하므로, 이 계층에서는 병합 없이 이어붙이기만 하고 캐싱만 담당한다.
+    /// </remarks>
     public IReadOnlyList<StatModifier> GetAllModifiers()
     {
         // 장비 변경사항이 없다면, 미리 만들어둔 리스트를 그대로 반환 (메모리 할당 0)
-        if (!_isDirty) 
+        if (!_isDirty)
         {
             return _cachedModifiers;
         }
 
         // 장비가 변경되었다면 캐시를 비우고 다시 채움
         _cachedModifiers.Clear();
-        // 1. 우선 장착 중인 모든 수정치를 임시로 모읍니다.
-        var tempModifiers = new List<StatModifier>();
         if (_equippedWeapon != null)
         {
-            tempModifiers.AddRange(_equippedWeapon.Modifiers);
+            _cachedModifiers.AddRange(_equippedWeapon.Modifiers);
         }
-        if (_equippedArmor != null) tempModifiers.AddRange(_equippedArmor.Modifiers);
-        if (_equippedAccessory != null) tempModifiers.AddRange(_equippedAccessory.Modifiers);
+        if (_equippedArmor != null) _cachedModifiers.AddRange(_equippedArmor.Modifiers);
+        if (_equippedAccessory != null) _cachedModifiers.AddRange(_equippedAccessory.Modifiers);
 
-        // 2. StatType과 ModType이 동일한 것끼리 그룹화(GroupBy)하여 Value를 합산(Sum)합니다.
-        var mergedModifiers = tempModifiers
-            .GroupBy(m => new { m.StatType, m.ModType })
-            .Select(g => new StatModifier
-            {
-                StatType = g.Key.StatType,
-                ModType = g.Key.ModType,
-                Value = g.Sum(m => m.Value) // 동일 그룹의 수치들을 하나로 더함
-            });
-
-        // 3. 병합된 결과를 캐시 리스트에 넣습니다.
-        _cachedModifiers.AddRange(mergedModifiers);
         _isDirty = false; // 갱신 완료
-        
+
         return _cachedModifiers;
     }
 }

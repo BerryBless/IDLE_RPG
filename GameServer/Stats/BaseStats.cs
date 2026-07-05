@@ -24,6 +24,12 @@ public sealed class BaseStats
     /// <summary>기본 초당 회복량.</summary>
     public BigNumber Recovery { get; set; }
 
+    /// <summary>기본 최대 마나.</summary>
+    public BigNumber Mana { get; set; }
+
+    /// <summary>기본 초당 마나 재생량.</summary>
+    public BigNumber ManaRegen { get; set; }
+
     /// <summary>두 <see cref="BaseStats"/>를 항목별로 합산한 새 인스턴스를 반환한다.</summary>
     /// <param name="a">첫 번째 피연산자</param>
     /// <param name="b">두 번째 피연산자</param>

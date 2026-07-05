@@ -9,6 +9,23 @@ try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 # 리포 루트를 하드코딩 없이 부모 디렉토리로 유도 — 다른 프로젝트로 이식 시 경로 수정 불필요
 $repo = Split-Path $PSScriptRoot -Parent
 
+# 0. commitandpush 파이프라인 실행 중 락 확인
+#    [2026-07-05 사고] Stop 훅은 asyncRewake로 백그라운드 실행되고, /commitandpush 파이프라인은
+#    서브 에이전트 대기·y/n/edit 확인 등으로 턴을 여러 번 넘긴다. 그 턴 경계마다 Stop 훅이 다시
+#    발동할 수 있어, 파이프라인이 보안 감사조차 끝내기 전에 이 훅이 먼저 전체를 커밋해버린
+#    사례가 실제로 발생했다(순서 보장 없이 같은 작업 트리를 두 경로가 동시에 커밋 시도).
+#    /commitandpush는 시작 시 .git/commitandpush.lock을 만들고 각 단계마다 갱신한다.
+#    락이 신선하면(15분 이내) 파이프라인이 살아있는 것으로 보고 자동 커밋을 완전히 건너뛴다.
+#    파이프라인이 중간에 죽어 락 해제를 못 했더라도, 15분을 넘기면 안전망 기능이 영구히
+#    막히지 않도록 만료된 락으로 간주하고 정상 진행한다.
+$lockFile = Join-Path $repo ".git\commitandpush.lock"
+if (Test-Path $lockFile) {
+    $lockAgeMinutes = ((Get-Date) - (Get-Item $lockFile).LastWriteTime).TotalMinutes
+    if ($lockAgeMinutes -lt 15) {
+        exit 0
+    }
+}
+
 # 1. 변경사항 확인
 $status = git -C $repo status --porcelain 2>&1
 if (-not $status) { exit 0 }

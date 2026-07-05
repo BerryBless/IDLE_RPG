@@ -10,6 +10,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "IdleRpg.Grader", "tests\Idl
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GameServer", "GameServer\GameServer.csproj", "{9CE05B3F-4123-437B-A102-19D14E846346}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GameServer.Tests", "tests\GameServer.Tests\GameServer.Tests.csproj", "{3A1860FB-4499-4761-A052-15CB4749B906}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -68,6 +70,18 @@ Global
 		{9CE05B3F-4123-437B-A102-19D14E846346}.Release|x64.Build.0 = Release|Any CPU
 		{9CE05B3F-4123-437B-A102-19D14E846346}.Release|x86.ActiveCfg = Release|Any CPU
 		{9CE05B3F-4123-437B-A102-19D14E846346}.Release|x86.Build.0 = Release|Any CPU
+		{3A1860FB-4499-4761-A052-15CB4749B906}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3A1860FB-4499-4761-A052-15CB4749B906}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3A1860FB-4499-4761-A052-15CB4749B906}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{3A1860FB-4499-4761-A052-15CB4749B906}.Debug|x64.Build.0 = Debug|Any CPU
+		{3A1860FB-4499-4761-A052-15CB4749B906}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{3A1860FB-4499-4761-A052-15CB4749B906}.Debug|x86.Build.0 = Debug|Any CPU
+		{3A1860FB-4499-4761-A052-15CB4749B906}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3A1860FB-4499-4761-A052-15CB4749B906}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3A1860FB-4499-4761-A052-15CB4749B906}.Release|x64.ActiveCfg = Release|Any CPU
+		{3A1860FB-4499-4761-A052-15CB4749B906}.Release|x64.Build.0 = Release|Any CPU
+		{3A1860FB-4499-4761-A052-15CB4749B906}.Release|x86.ActiveCfg = Release|Any CPU
+		{3A1860FB-4499-4761-A052-15CB4749B906}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -75,5 +89,6 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{2A510FF1-205F-4CC3-A831-98AB9EC03D57} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{589EBBA3-DF6B-4B50-A62D-DFB60B90458F} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{3A1860FB-4499-4761-A052-15CB4749B906} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal
