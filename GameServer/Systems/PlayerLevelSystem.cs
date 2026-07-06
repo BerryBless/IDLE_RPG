@@ -11,6 +11,19 @@ namespace GameServer.Systems;
 /// 이제 인스턴스가 생성자로 <see cref="IMasterDataTable{TKey,T}"/>를 주입받는다. 레벨 규칙을 다른
 /// 데이터셋으로 바꾸거나 테스트에서 대체 테이블을 주입할 수 있다.
 /// </remarks>
+/// <remarks>
+/// <b>[성능 및 동시성 제약 조건]</b>
+/// <list type="bullet">
+/// <item><description><b>Thread Safety:</b> 주입된 <see cref="IMasterDataTable{TKey,T}"/>가 불변이라면
+/// 이 시스템 자체는 공유 상태를 갖지 않아 여러 스레드가 동시에 <see cref="ApplyLevel"/>/
+/// <see cref="CheckLevelUp"/>을 호출해도 안전하다. 다만 <b>같은 <see cref="Player"/> 인스턴스</b>를
+/// 여러 스레드가 동시에 대상으로 호출하는 것은 지원하지 않는다(플레이어 자체가 가변 상태이므로).</description></item>
+/// <item><description><b>Memory Allocation:</b> <see cref="ApplyLevel"/>은 필드 대입뿐이라 추가 힙
+/// 할당이 없다. <see cref="CheckLevelUp"/>은 매 호출 <c>_levelTable.All.Max(...)</c>로 LINQ Max를
+/// 1회 평가한다(사소하지만 완전한 Zero-allocation은 아님).</description></item>
+/// <item><description><b>Blocking 여부:</b> 전부 즉시 반환(동기, non-blocking). I/O 없음.</description></item>
+/// </list>
+/// </remarks>
 public sealed class PlayerLevelSystem
 {
     private readonly IMasterDataTable<int, LevelTemplate> _levelTable;

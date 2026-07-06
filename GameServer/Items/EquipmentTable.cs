@@ -12,18 +12,23 @@ namespace GameServer.Items;
 /// 하면 되고, <see cref="IMasterDataTable{TKey,T}"/>를 사용하는 다른 코드는 전혀 바뀔 필요가
 /// 없다(코드리뷰 2026-07-06 H1 수정 — 이전에는 static class + 정적 필드 초기화식으로 고정되어
 /// 있어 테스트에서 대체 데이터셋을 주입할 수 없었다).
+/// <b>[ID 대역]</b> <see cref="EquipmentTemplate.ItemMetaId"/>는 무기 4000번대·방어구 5000번대·
+/// 장신구 6000번대를 사용한다. 몬스터(<c>GameServer.Systems.MonsterTemplate.MonsterId</c>)의
+/// 2000번대·드롭 아이템 3000번대와 겹치지 않게 채번한다(코드리뷰 2026-07-06 Low 수정 — 이전에는
+/// 이 대역 규칙이 문서화되지 않고 암묵적으로만 지켜지고 있었다).
+/// <b>[조회 로직]</b> 코드리뷰 2026-07-06 Medium 수정: 조회는 이제
+/// <see cref="MasterDataTable{TKey,T}"/> 공통 기반의 Dictionary 인덱스를 사용한다(과거 foreach
+/// 선형 탐색이 3개 테이블에 중복돼 있던 것을 제거).
 /// </remarks>
-public sealed class EquipmentTable : IMasterDataTable<int, EquipmentTemplate>
+public sealed class EquipmentTable : MasterDataTable<int, EquipmentTemplate>
 {
-    /// <summary>등록된 전체 장비 종 목록(슬롯별 티어 오름차순).</summary>
-    public IReadOnlyList<EquipmentTemplate> All { get; }
-
-    /// <summary>주어진 템플릿 목록으로 테이블을 구성한다.</summary>
+    /// <summary>주어진 템플릿 목록으로 테이블을 구성한다(아이템 메타 ID 중복 시 즉시 실패).</summary>
     /// <param name="templates">등록할 장비 템플릿 목록</param>
+    /// <exception cref="ArgumentException"><paramref name="templates"/>에 <see cref="EquipmentTemplate.ItemMetaId"/>
+    /// 중복이 있는 경우</exception>
     public EquipmentTable(IReadOnlyList<EquipmentTemplate> templates)
+        : base(templates, t => t.ItemMetaId, "장비 템플릿")
     {
-        ArgumentNullException.ThrowIfNull(templates);
-        All = templates;
     }
 
     /// <summary>하드코딩된 기본 15종(무기·방어구·장신구 각 5종) 데이터로 테이블을 생성한다.</summary>
@@ -129,21 +134,4 @@ public sealed class EquipmentTable : IMasterDataTable<int, EquipmentTemplate>
         }
     };
 
-    /// <summary>지정한 ID의 장비 템플릿을 찾는다.</summary>
-    /// <param name="id">조회할 아이템 메타 ID</param>
-    /// <returns>일치하는 <see cref="EquipmentTemplate"/></returns>
-    /// <exception cref="KeyNotFoundException">일치하는 장비가 없는 경우 — 마스터 데이터 설정
-    /// 오류를 조용히 넘기지 않고 즉시 실패시킨다.</exception>
-    public EquipmentTemplate GetById(int id)
-    {
-        foreach (var template in All)
-        {
-            if (template.ItemMetaId == id)
-            {
-                return template;
-            }
-        }
-
-        throw new KeyNotFoundException($"ItemMetaId {id}에 해당하는 장비 템플릿을 찾을 수 없습니다.");
-    }
 }

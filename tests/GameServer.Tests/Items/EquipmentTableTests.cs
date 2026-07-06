@@ -64,4 +64,16 @@ public class EquipmentTableTests
         Assert.Equal(15, defaultTable.All.Count);
         Assert.Throws<KeyNotFoundException>(() => defaultTable.GetById(9001));
     }
+
+    [Fact]
+    public void Constructor_DuplicateItemMetaIds_ThrowsArgumentException()
+    {
+        // 코드리뷰 2026-07-06 Medium 수정: Dictionary 인덱스 구축이 중복 ID를 테이블 생성 시점에
+        // 즉시 걸러낸다(마스터 데이터 설정 오류를 조용히 넘기지 않음).
+        Assert.Throws<ArgumentException>(() => new EquipmentTable(new List<EquipmentTemplate>
+        {
+            new() { ItemMetaId = 1, Name = "A", Slot = SlotType.Weapon },
+            new() { ItemMetaId = 1, Name = "B", Slot = SlotType.Armor }
+        }));
+    }
 }

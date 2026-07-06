@@ -12,18 +12,23 @@ namespace GameServer.Systems;
 /// 하면 되고, <see cref="IMasterDataTable{TKey,T}"/>를 사용하는 다른 코드는 전혀 바뀔 필요가
 /// 없다(코드리뷰 2026-07-06 H1 수정 — 이전에는 static class + 정적 필드 초기화식으로 고정되어
 /// 있어 테스트에서 대체 데이터셋을 주입할 수 없었다).
+/// <b>[ID 대역]</b> <see cref="MonsterTemplate.MonsterId"/>는 2000번대를 사용한다. 드롭 아이템
+/// (<see cref="DropPool.ItemMetaId"/>)은 3000번대로, 장비(<c>GameServer.Items.EquipmentTemplate</c>)의
+/// 4000~6000번대와 겹치지 않게 채번한다(코드리뷰 2026-07-06 Low 수정 — 이전에는 이 대역 규칙이
+/// 문서화되지 않고 암묵적으로만 지켜지고 있었다).
+/// <b>[조회 로직]</b> 코드리뷰 2026-07-06 Medium 수정: 조회는 이제
+/// <see cref="MasterDataTable{TKey,T}"/> 공통 기반의 Dictionary 인덱스를 사용한다(과거 foreach
+/// 선형 탐색이 3개 테이블에 중복돼 있던 것을 제거).
 /// </remarks>
-public sealed class MonsterTable : IMasterDataTable<int, MonsterTemplate>
+public sealed class MonsterTable : MasterDataTable<int, MonsterTemplate>
 {
-    /// <summary>등록된 전체 몬스터 종 목록(난이도 순).</summary>
-    public IReadOnlyList<MonsterTemplate> All { get; }
-
-    /// <summary>주어진 템플릿 목록으로 테이블을 구성한다.</summary>
+    /// <summary>주어진 템플릿 목록으로 테이블을 구성한다(몬스터 ID 중복 시 즉시 실패).</summary>
     /// <param name="templates">등록할 몬스터 템플릿 목록</param>
+    /// <exception cref="ArgumentException"><paramref name="templates"/>에 <see cref="MonsterTemplate.MonsterId"/>
+    /// 중복이 있는 경우</exception>
     public MonsterTable(IReadOnlyList<MonsterTemplate> templates)
+        : base(templates, t => t.MonsterId, "몬스터 템플릿")
     {
-        ArgumentNullException.ThrowIfNull(templates);
-        All = templates;
     }
 
     /// <summary>하드코딩된 기본 10종 데이터로 테이블을 생성한다.</summary>
@@ -99,21 +104,4 @@ public sealed class MonsterTable : IMasterDataTable<int, MonsterTemplate>
         }
     };
 
-    /// <summary>지정한 ID의 몬스터 템플릿을 찾는다.</summary>
-    /// <param name="id">조회할 몬스터 ID</param>
-    /// <returns>일치하는 <see cref="MonsterTemplate"/></returns>
-    /// <exception cref="KeyNotFoundException">일치하는 몬스터가 없는 경우 — 마스터 데이터 설정
-    /// 오류를 조용히 넘기지 않고 즉시 실패시킨다.</exception>
-    public MonsterTemplate GetById(int id)
-    {
-        foreach (var template in All)
-        {
-            if (template.MonsterId == id)
-            {
-                return template;
-            }
-        }
-
-        throw new KeyNotFoundException($"MonsterId {id}에 해당하는 몬스터 템플릿을 찾을 수 없습니다.");
-    }
 }

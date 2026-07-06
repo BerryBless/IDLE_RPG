@@ -55,4 +55,16 @@ public class MonsterTableTests
         Assert.Equal(10, defaultTable.All.Count); // 커스텀 인스턴스가 기본 데이터에 영향 없음
         Assert.Throws<KeyNotFoundException>(() => defaultTable.GetById(9001));
     }
+
+    [Fact]
+    public void Constructor_DuplicateMonsterIds_ThrowsArgumentException()
+    {
+        // 코드리뷰 2026-07-06 Medium 수정: Dictionary 인덱스 구축이 중복 ID를 테이블 생성 시점에
+        // 즉시 걸러낸다(마스터 데이터 설정 오류를 조용히 넘기지 않음).
+        Assert.Throws<ArgumentException>(() => new MonsterTable(new List<MonsterTemplate>
+        {
+            new() { MonsterId = 1, Name = "A", Level = 1, Hp = 1, Atk = 1, Def = 0 },
+            new() { MonsterId = 1, Name = "B", Level = 1, Hp = 1, Atk = 1, Def = 0 }
+        }));
+    }
 }

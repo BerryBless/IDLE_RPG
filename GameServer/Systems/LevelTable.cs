@@ -12,12 +12,12 @@ namespace GameServer.Systems;
 /// 같은 별도 팩토리를 추가하기만 하면 되고, <see cref="IMasterDataTable{TKey,T}"/>를 사용하는
 /// 다른 코드는 전혀 바뀔 필요가 없다(코드리뷰 2026-07-06 H1 수정 — 이전에는 static class + 정적
 /// 필드 초기화식으로 고정되어 있어 테스트에서 대체 데이터셋을 주입할 수 없었다).
+/// <b>[조회 로직]</b> 코드리뷰 2026-07-06 Medium 수정: 조회는 이제 <see cref="MasterDataTable{TKey,T}"/>
+/// 공통 기반의 Dictionary 인덱스를 사용한다(과거 foreach 선형 탐색이 3개 테이블에 중복돼 있던 것을
+/// 제거). <c>PlayerLevelSystem.CheckLevelUp</c>이 몬스터 처치마다 호출하는 핫패스라 특히 유효하다.
 /// </remarks>
-public sealed class LevelTable : IMasterDataTable<int, LevelTemplate>
+public sealed class LevelTable : MasterDataTable<int, LevelTemplate>
 {
-    /// <summary>등록된 전체 레벨 목록(1레벨부터 오름차순).</summary>
-    public IReadOnlyList<LevelTemplate> All { get; }
-
     /// <summary>테이블에 정의된 최고 레벨.</summary>
     /// <remarks>
     /// 코드리뷰 H1과 함께 발견된 부수 결함 수정: 이전에는 <c>All.Count</c>(개수)로 계산해
@@ -26,12 +26,13 @@ public sealed class LevelTable : IMasterDataTable<int, LevelTemplate>
     /// </remarks>
     public int MaxLevel => All.Count == 0 ? 0 : All.Max(t => t.Level);
 
-    /// <summary>주어진 템플릿 목록으로 테이블을 구성한다.</summary>
+    /// <summary>주어진 템플릿 목록으로 테이블을 구성한다(레벨 중복 시 즉시 실패).</summary>
     /// <param name="templates">등록할 레벨 템플릿 목록</param>
+    /// <exception cref="ArgumentException"><paramref name="templates"/>에 <see cref="LevelTemplate.Level"/>
+    /// 중복이 있는 경우</exception>
     public LevelTable(IReadOnlyList<LevelTemplate> templates)
+        : base(templates, t => t.Level, "레벨 템플릿")
     {
-        ArgumentNullException.ThrowIfNull(templates);
-        All = templates;
     }
 
     /// <summary>하드코딩된 기본 1~10레벨 데이터로 테이블을 생성한다.</summary>
@@ -50,22 +51,4 @@ public sealed class LevelTable : IMasterDataTable<int, LevelTemplate>
         new() { Level = 9, RequiredExp = 1000, Hp = 620, Atk = 76, Def = 32 },
         new() { Level = 10, RequiredExp = 1400, Hp = 730, Atk = 92, Def = 40 }
     };
-
-    /// <summary>지정한 레벨의 템플릿을 찾는다.</summary>
-    /// <param name="id">조회할 레벨</param>
-    /// <returns>일치하는 <see cref="LevelTemplate"/></returns>
-    /// <exception cref="KeyNotFoundException">일치하는 레벨이 없는 경우 — 마스터 데이터 설정
-    /// 오류를 조용히 넘기지 않고 즉시 실패시킨다.</exception>
-    public LevelTemplate GetById(int id)
-    {
-        foreach (var template in All)
-        {
-            if (template.Level == id)
-            {
-                return template;
-            }
-        }
-
-        throw new KeyNotFoundException($"Level {id}에 해당하는 레벨 템플릿을 찾을 수 없습니다.");
-    }
 }

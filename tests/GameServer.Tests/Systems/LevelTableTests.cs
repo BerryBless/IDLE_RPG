@@ -76,4 +76,16 @@ public class LevelTableTests
 
         Assert.Throws<KeyNotFoundException>(() => table.GetById(999));
     }
+
+    [Fact]
+    public void Constructor_DuplicateLevels_ThrowsArgumentException()
+    {
+        // 코드리뷰 2026-07-06 Medium 수정: Dictionary 인덱스 구축이 중복 레벨을 테이블 생성 시점에
+        // 즉시 걸러낸다(마스터 데이터 설정 오류를 조용히 넘기지 않음).
+        Assert.Throws<ArgumentException>(() => new LevelTable(new List<LevelTemplate>
+        {
+            new() { Level = 1, RequiredExp = 0, Hp = 1, Atk = 1, Def = 0 },
+            new() { Level = 1, RequiredExp = 10, Hp = 2, Atk = 2, Def = 0 }
+        }));
+    }
 }

@@ -414,6 +414,42 @@ public LootData ProcessOfflineTime(Player player, Monster stageMonster, int offl
 - Medium/Low 항목(조회 로직 3벌 중복, `CheckLevelUp` 중복 조회, 문서 주석 누락, JSON 이관 시
   값 검증 등)은 의도적으로 이번 사이클 범위 밖으로 남김(§8 참고)
 
+**2026-07-06 코드리뷰 Medium/Low 수정 완료 (advisor 자문으로 스코프 정제):**
+JSON 로더가 아직 없는 상태에서의 값 검증·경로 보호·enum 검증, 그리고 다중 전투 동시 실행을
+전제로 한 `LogTick`/`InstanceId` 최적화처럼 "존재하지 않는 미래를 위한" 항목은 의도적으로
+제외하고, 지금 바로 실체가 있는 항목만 수정했다.
+- 신규 `GameServer/Stats/MasterDataTable.cs`: `IMasterDataTable<TKey,T>` 공통 기반 추상 클래스.
+  생성자에서 `Dictionary<TKey,T>` 인덱스를 1회 구축해 `GetById`를 O(1)로 만들고(코드리뷰 Medium —
+  세 테이블에 중복돼 있던 foreach 선형 탐색 제거), 부수 효과로 `ToDictionary`가 중복 키를 생성
+  시점에 즉시 `ArgumentException`으로 걸러낸다(코드리뷰 Low 보안 항목 중 "중복 ID" 부분을
+  JSON 로더 없이도 지금 해소 — "갭이 있는 레벨"에 대한 `CheckLevelUp` 내성은 여전히 미해결이라
+  §8에 유지)
+- `Systems/MonsterTable.cs`·`Items/EquipmentTable.cs`·`Systems/LevelTable.cs`: 위 기반 클래스를
+  상속하도록 전환(`GetById`/`All` 중복 구현 제거), ID 대역 규약(2000/3000/4000/5000/6000번대)을
+  클래스 `<remarks>`에 명문화(코드리뷰 스타일 Low)
+- 신규 `GameServer/Systems/PlayerFactory.cs`: `new Player{}` → `ApplyLevel` → `RestoreResources`
+  3단계 수동 호출 시 마지막 호출을 빠뜨리면 `CurrentHp=0`으로 즉사 상태가 되는 함정을 제거
+  (`MonsterFactory`/`EquipmentFactory`와 대칭, 코드리뷰 아키텍처 Medium). `ApplyLevel` 자체는
+  전투 중 레벨업에도 재사용되므로 건드리지 않음(자동 회복 부작용 방지)
+- `Systems/MonsterFactory.cs`: `CreateMonster`→`Create`로 이름 통일(`EquipmentFactory.Create`와
+  네이밍 관례 일치, 코드리뷰 스타일 Low)
+- `Systems/MonsterTable.cs`·`Items/EquipmentTable.cs`·`Systems/MonsterFactory.cs`·
+  `Items/EquipmentFactory.cs`·`Systems/PlayerLevelSystem.cs`: CLAUDE.md 필수 Thread Safety/
+  Memory Allocation/Blocking `<remarks>` 보강(코드리뷰 스타일 Medium)
+- `GameServer/Main.cs`: `PlayerFactory.Create`/`MonsterFactory.Create` 사용으로 교체,
+  `AccountId = 000`(8진 리터럴처럼 보이는 모호한 표기)→`0`, `BigNumber` TODO 주석을 트리거
+  조건 명시형으로 보강(코드리뷰 스타일 Low), 장비 장착 후 `UpdateFinalStats`/`RestoreResources`
+  재호출 추가(팩토리 도입으로 레벨 적용 시점이 장비 장착보다 앞으로 당겨지며 생긴 간극 보정)
+- 기존 5개 테스트 파일에 중복 키 fail-fast 검증 3건 + 팩토리 리네이밍 반영, 신규
+  `tests/GameServer.Tests/Systems/PlayerFactoryTests.cs`(4개) 추가(총 99개 통과)
+- 의도적으로 남긴 항목(모두 §8로 이동): JSON 값 검증/경로 보호/enum 검증(로더 자체가 없음),
+  `LogTick`의 매 틱 `Console.WriteLine`(다중 전투 동시 실행 전제, 현재는 단일 데모 루프뿐이라
+  변경 시 관측 가능한 데모 출력만 바뀌고 실익이 없음), `CheckLevelUp`의 이중 조회(Dictionary
+  인덱스 도입으로 양쪽 다 O(1)이 되어 실질적 이득 없음), `LevelTable` 갭 데이터에 대한
+  `CheckLevelUp` 내성(설계 결정이 필요한 사안), `EquipmentTemplate.AttackScaling` god-data 소지 +
+  `EquipmentFactory`의 `SlotType` switch 확장점(현재 규모에서 리뷰어가 직접 "당장 불필요"라고
+  명시), `MonsterFactory`/`EquipmentFactory`의 `Guid.NewGuid()` 할당(미래 스포너 최적화 대상)
+
 **다음 구현 사이클 예정 (신규, 미착수):**
 - `Systems/Stage.cs`, `Systems/Wave.cs`, `Systems/MonsterSpawner.cs`, `Systems/ReviveCostCalculator.cs`
 - 스킬 정의 체계 + `BattleLoop.Tick`의 `t3s`(스킬 자동 시전) 분기, `AtkSpeed` 기반 실시간 쿨타임
@@ -460,6 +496,12 @@ dotnet run --project GameServer/GameServer.csproj
 `IdleRpg.HarnessTests` 98/98 영향 없음. `Main.cs`가 `RunAsync`(비동기)로 정상 실행되며 기존과
 동일한 전투 페이스를 유지함을 육안으로 확인함.
 
+**실행 결과(2026-07-06, 코드리뷰 Medium/Low 수정):** 솔루션 전체 0 warning / 0 error.
+`GameServer.Tests` **99/99** 통과(92개 + 중복 키 fail-fast 검증 3건 + `PlayerFactoryTests` 4건).
+기존 `IdleRpg.HarnessTests` 98/98 영향 없음. `Main.cs`를 몇 초간 직접 실행해 `PlayerFactory.Create`로
+생성된 플레이어가 정상적으로 전투를 진행하고(HP 100에서 시작해 데미지 교환), 고블린을 처치해
+로그가 정확히 출력되는 것을 육안으로 확인함.
+
 ## 8. 향후 확장 포인트 (미결 사항)
 
 - 부활 코스트 공식 확정 (골드 지수 증가 vs 고정 쿨다운) — `ReviveCostCalculator`
@@ -468,13 +510,22 @@ dotnet run --project GameServer/GameServer.csproj
   `AtkSpeed` 기반 실시간 쿨타임, DoT(지속 피해) 실행 루프
 - `MonsterTable`/`EquipmentTable`/`LevelTable`의 `CreateDefault()` 하드코딩 데이터를 JSON 파일
   기반 로딩(`FromJson(path)` 등)으로 이관(코드리뷰 H1로 인터페이스+인스턴스 기반이 되어 로딩
-  방식만 추가하면 됨). 이관 시 값 검증(DropChance 범위, 음수 스탯, enum 미정의 값 등, 코드리뷰
-  보안 도메인 Low 4건) 계층 도입 필요
-- 세 테이블의 `GetById` 조회 로직 중복 제거(제네릭 헬퍼/베이스로 통합) + `Dictionary` 인덱스로
-  O(1)화, `PlayerLevelSystem.CheckLevelUp`의 중복 조회 제거(코드리뷰 Medium, 2026-07-06 리뷰에서
-  발견, 의도적으로 이번 사이클 범위 밖)
-- `MonsterTable`/`EquipmentTable`/`MonsterFactory`/`EquipmentFactory` 등 public static API에
-  CLAUDE.md 필수 Thread Safety/할당/블로킹 `<remarks>` 보강(코드리뷰 스타일 도메인 Medium)
+  방식만 추가하면 됨). 이관 시 값 검증(DropChance 범위, 음수 스탯, enum 미정의 값 등, 경로 조작·
+  파일 크기 제한, 코드리뷰 보안 도메인 Low 4건)과 `LevelTable`의 레벨 갭 데이터에 대한
+  `CheckLevelUp` 내성(현재는 갭이 있으면 `player.Level+1`이 존재하지 않아 `KeyNotFoundException`
+  으로 크래시 — 갭을 건너뛸지 막을지는 설계 결정 필요) 계층 도입 필요. 세 테이블의 조회 로직
+  중복·`Dictionary` 인덱스화·문서 주석 누락은 2026-07-06 코드리뷰 Medium/Low 수정에서 이미 해소
+  (`MasterDataTable<TKey,T>` 공통 기반 + 생성 시 중복 키 fail-fast)
+- `BattleLoop.LogTick`의 매 틱 `Console.WriteLine`(다중 전투 동시 실행 시 콘솔 락 경합 우려로
+  코드리뷰 Medium 지적) — 현재는 단일 데모 루프뿐이라 실익 없이 데모 출력만 바뀌므로 의도적으로
+  보류. 실제로 여러 전투를 동시 실행하는 설계가 나오면 이벤트 전용 로깅/버퍼링으로 교체 검토
+- `EquipmentTemplate.AttackScaling`이 `Weapon` 슬롯에서만 의미 있는 필드로 남아있는 god-data
+  소지, `EquipmentFactory`의 `SlotType` switch가 슬롯 타입 추가 시 유일한 편집점인 점(코드리뷰
+  아키텍처 Low) — 리뷰어도 "현재 규모에서 당장 리팩토링 필요 없음"이라 명시, 슬롯 종류가
+  늘어날 때 재검토
+- `MonsterFactory.Create`/`EquipmentFactory.Create`의 `Guid.NewGuid()` + 문자열 보간 `InstanceId`
+  할당(코드리뷰 성능 Low) — 몬스터가 재사용(`RestoreResources`)되고 킬마다 재생성되지 않는 현재
+  구조에선 GC 압력이 없음. `MonsterSpawner` 도입으로 킬마다 재스폰하는 구조가 되면 재검토
 - 장비 밸런스 재조정(이번 사이클은 데모용 값) + 강화/제작 시 `Equipment.RandomModifiers`를
   실제로 채우는 로직(현재 `EquipmentFactory`는 항상 빈 채로 반환)
 - 레벨업 시 자동 회복 여부 결정(현재는 `MaxHp`만 늘고 `CurrentHp`는 그대로라 레벨업 직후
