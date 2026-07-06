@@ -1,9 +1,13 @@
+namespace GameServer.Tests.Systems;
+
+// [2026-07-06 임시 주석 처리] GameServer/Systems/OfflineProgressionManager.cs가 같은 날짜에
+// 블록 주석 처리되어 이 타입이 컴파일 대상에서 빠졌으므로, 이 테스트 파일도 함께 주석 처리한다
+// (재활성화 시 함께 풀 것 — plan/battle_system_0705.md §6 참고).
+/*
 using GameServer.Entities;
 using GameServer.Items;
 using GameServer.Stats;
 using GameServer.Systems;
-
-namespace GameServer.Tests.Systems;
 
 public class OfflineProgressionManagerTests
 {
@@ -126,3 +130,4 @@ public class OfflineProgressionManagerTests
         Assert.Empty(loot.AcquiredItems);
     }
 }
+*/

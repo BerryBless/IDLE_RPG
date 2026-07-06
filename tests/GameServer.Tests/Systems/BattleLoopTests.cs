@@ -84,6 +84,32 @@ public class BattleLoopTests
     }
 
     [Fact]
+    public void Tick_MonsterDefeated_ExpCrossesLevelThreshold_LevelsUpPlayer()
+    {
+        // 코드리뷰: 레벨 테이블 배선 확인. 몬스터 ExpDrop=25는 Lv2 임계치(20)를 넘으므로
+        // 한 번의 처치로 플레이어가 Lv1→Lv2로 레벨업해야 한다.
+        var player = MakePlayer(hp: 100, atk: 1000);
+        var monster = new Monster
+        {
+            InstanceId = "m-levelup",
+            MonsterId = 1,
+            Level = 1,
+            Rewards = new RewardComponent { ExpDrop = 25, GoldDrop = 0 }
+        };
+        monster.BaseStats.Hp = 10;
+        monster.BaseStats.Atk = 0;
+        monster.UpdateFinalStats();
+        monster.RestoreResources();
+        var loop = new BattleLoop();
+
+        var result = loop.Tick(player, monster, deltaTime: 1f);
+
+        Assert.Equal(BattleTickEvent.MonsterDefeated, result);
+        Assert.Equal(2, player.Level);
+        Assert.Equal(130, player.BaseStats.Hp); // LevelTable Lv2 스탯 반영 확인
+    }
+
+    [Fact]
     public void Run_WithCancellationToken_StopsWithoutHanging()
     {
         // HP를 충분히 크게 잡아 취소 시점까지 어느 쪽도 죽지 않게 하고, 취소 후 정상 반환되는지만 확인.

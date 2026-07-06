@@ -47,6 +47,7 @@ public sealed class BattleLoop
     /// <remarks>
     /// 순서: 양쪽 <see cref="Entity.Update"/>로 스탯 재계산·자연 회복·버프 틱 →
     /// 플레이어가 <see cref="BattleManager.CalcFinalDamage"/>로 공격 → 몬스터가 죽으면 보상 지급 후
+    /// <see cref="PlayerLevelSystem.CheckLevelUp"/>로 레벨업 판정·적용 →
     /// <see cref="Entity.RestoreResources"/>로 즉시 재등장(이번 틱엔 몬스터의 반격이 없다) →
     /// 몬스터가 생존해 있으면 몬스터가 반격 → 플레이어가 죽으면 즉시 <see cref="Entity.RestoreResources"/>로 부활한다
     /// (부활 비용 차감은 아직 구현하지 않음 — 다음 사이클의 <c>ReviveCostCalculator</c> 대상).
@@ -65,6 +66,7 @@ public sealed class BattleLoop
             var loot = monster.Rewards.GenerateLoot(1);
             player.AddExp(loot.TotalExp);
             player.AddGold(loot.TotalGold);
+            PlayerLevelSystem.CheckLevelUp(player); // 경험치 획득 직후 레벨업 판정·적용(LevelTable 기반)
             monster.RestoreResources();
             return BattleTickEvent.MonsterDefeated;
         }
@@ -120,7 +122,7 @@ public sealed class BattleLoop
         {
             case BattleTickEvent.MonsterDefeated:
                 Console.WriteLine(
-                    $"[처치] 몬스터 처치! 누적 Exp={player.CurrentExp}, Gold={player.CurrentGold} — 몬스터 재등장");
+                    $"[처치] 몬스터 처치! Lv.{player.Level} 누적 Exp={player.CurrentExp}, Gold={player.CurrentGold} — 몬스터 재등장");
                 break;
             case BattleTickEvent.PlayerDefeated:
                 Console.WriteLine("[부활] 플레이어 사망 → 즉시 부활");

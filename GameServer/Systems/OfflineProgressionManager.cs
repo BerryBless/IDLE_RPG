@@ -1,7 +1,10 @@
-using GameServer.Entities;
-
 namespace GameServer.Systems;
 
+// [2026-07-06 임시 주석 처리] 현재 사이클은 Main.cs의 온라인 BattleLoop에만 집중하기로 해
+// OfflineProgressionManager를 컴파일 대상에서 제외한다. 삭제가 아니라 주석 처리이므로,
+// 재활성화하려면 이 블록 주석(/* ... */)을 해제하고 tests/GameServer.Tests/Systems/
+// OfflineProgressionManagerTests.cs도 함께 주석 해제하면 된다(plan/battle_system_0705.md §6 참고).
+/*
 /// <summary>
 /// 플레이어가 접속하지 않은 동안의 방치 진행(오프라인 사냥)을 계산하는 전역 시스템.
 /// </summary>
@@ -58,3 +61,4 @@ public sealed class OfflineProgressionManager
         return stageMonster.Rewards.GenerateLoot(killCount);
     }
 }
+*/
