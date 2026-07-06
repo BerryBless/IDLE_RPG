@@ -5,10 +5,13 @@ namespace GameServer.Tests.Items;
 
 public class EquipmentFactoryTests
 {
+    // 인스턴스이지만 데이터가 불변(생성자에서만 설정)이라 여러 테스트가 동시에 읽어도 안전하다.
+    private static readonly EquipmentTable Table = EquipmentTable.CreateDefault();
+
     [Fact]
     public void Create_WeaponTemplate_ReturnsWeaponWithAttackScalingAndModifiers()
     {
-        var template = EquipmentTable.GetById(4001); // 낡은 검: AttackScaling 1.5, Atk+1
+        var template = Table.GetById(4001); // 낡은 검: AttackScaling 1.5, Atk+1
 
         var equipment = EquipmentFactory.Create(template);
 
@@ -22,7 +25,7 @@ public class EquipmentFactoryTests
     [Fact]
     public void Create_ArmorTemplate_ReturnsArmor()
     {
-        var template = EquipmentTable.GetById(5001); // 가죽 갑옷: Def+3
+        var template = Table.GetById(5001); // 가죽 갑옷: Def+3
 
         var equipment = EquipmentFactory.Create(template);
 
@@ -33,7 +36,7 @@ public class EquipmentFactoryTests
     [Fact]
     public void Create_AccessoryTemplate_ReturnsAccessory()
     {
-        var template = EquipmentTable.GetById(6001); // 낡은 반지: CritProb+0.02
+        var template = Table.GetById(6001); // 낡은 반지: CritProb+0.02
 
         var equipment = EquipmentFactory.Create(template);
 
@@ -44,7 +47,7 @@ public class EquipmentFactoryTests
     [Fact]
     public void Create_EachCallProducesIndependentInstance()
     {
-        var template = EquipmentTable.GetById(4001);
+        var template = Table.GetById(4001);
 
         var first = EquipmentFactory.Create(template);
         var second = EquipmentFactory.Create(template);
@@ -57,7 +60,14 @@ public class EquipmentFactoryTests
     public void Create_MutatingTemplateAfterCreate_DoesNotAffectCreatedInstance()
     {
         // BaseModifiers는 템플릿 리스트를 복사해 전달해야 한다(인스턴스 간 리스트 공유 방지).
-        var template = EquipmentTable.GetById(5001);
+        // 공유 Table 인스턴스를 오염시키지 않도록 이 템플릿만 별도로 복제해 사용한다.
+        var template = new EquipmentTemplate
+        {
+            ItemMetaId = 5001,
+            Name = "가죽 갑옷(복제)",
+            Slot = SlotType.Armor,
+            BaseModifiers = [.. Table.GetById(5001).BaseModifiers]
+        };
         var originalCount = template.BaseModifiers.Count;
 
         var equipment = EquipmentFactory.Create(template);

@@ -47,7 +47,7 @@ flowchart TB
     subgraph ONLINE [온라인 실시간 전투 · 완전 자동 · 틱 시뮬레이션]
         direction TB
 
-        s1["웨이브 스폰<br/>(다중 몬스터 N마리)"]
+        s1["웨이브 스폰<br/>(다중 몬스터 N마리)<br/>*몬스터 마스터 데이터(MonsterTable, 10종) 구현됨 — 웨이브당 다중 스폰·로테이션 자체는 여전히 MonsterSpawner(다음 사이클) 대상*"]
 
         subgraph LOOP [전투 틱 루프 · deltaTime 구동]
             direction TB
@@ -75,7 +75,7 @@ flowchart TB
 
         c1 -- 전멸 --> FAIL
         c2 -- "전멸(처치)" --> r1["일반 보상 획득<br/>골드 / 경험치 / 아이템 드롭(DropTable)<br/>*ItemMetaId별 수량 집계로 할당 최소화(코드리뷰 F11)*"]
-        r1 --> r2["경험치 누적 → 레벨업 판정<br/>(캐릭터 레벨 · 스탯 상승, 스테이지 등반과 별개)"]
+        r1 --> r2["경험치 누적 → 레벨업 판정<br/>(캐릭터 레벨 · 스탯 상승, 스테이지 등반과 별개)<br/>*구현됨: PlayerLevelSystem.CheckLevelUp + LevelTable(1~10레벨, 코드리뷰 H1로 인스턴스 기반). BattleLoop.Tick에 배선 완료*"]
         r2 --> w1{"보스 등장 조건?<br/>(웨이브 N/N 완료)"}
 
         w1 -- No --> s1
@@ -152,13 +152,18 @@ GameServer/
 │  ├─ BaseStats.cs       — 구현됨. Mana/ManaRegen 필드 추가. ※ operator+는 여전히 미구현
 │  │                        스텁(NotImplementedException) — 파이프라인이 필드를 직접 읽어 호출되지
 │  │                        않으므로 런타임 영향은 없음(코드리뷰 F9)
-│  └─ FinalStats.cs      — 구현됨. MaxMana/CurrentMana/ManaRegen + AttackScaling 필드 추가
-│                           (AttackScaling은 코드리뷰 F1 수정으로 추가: 무기 배율을 온라인·오프라인이
-│                           동일하게 읽도록 함)
+│  ├─ FinalStats.cs      — 구현됨. MaxMana/CurrentMana/ManaRegen + AttackScaling 필드 추가
+│  │                         (AttackScaling은 코드리뷰 F1 수정으로 추가: 무기 배율을 온라인·오프라인이
+│  │                         동일하게 읽도록 함)
+│  └─ IMasterDataTable.cs — 신규(코드리뷰 H1, 2026-07-06). Monster/Equipment/LevelTable이 공통
+│                            구현하는 조회 인터페이스(GetById/All). Stats에 둔 이유: Items/Systems
+│                            양쪽이 순환 의존 없이 구현할 수 있는 "기반, 무의존" 계층이기 때문
 ├─ Items/
 │  ├─ EquipmentTemplate.cs — 구현됨(2026-07-06). 장비 1종의 순수 데이터 정의(JSON 이관 대비,
 │  │                          MonsterTemplate과 동일 패턴)
-│  ├─ EquipmentTable.cs   — 구현됨(2026-07-06). 무기·방어구·장신구 각 5종(총 15종) 하드코딩
+│  ├─ EquipmentTable.cs   — 구현됨(2026-07-06), 코드리뷰 H1(2026-07-06)로 static class →
+│  │                          IMasterDataTable<int,EquipmentTemplate> 구현 인스턴스로 전환.
+│  │                          무기·방어구·장신구 각 5종(총 15종) 하드코딩
 │  │                          마스터 데이터 + GetById 조회
 │  └─ EquipmentFactory.cs — 구현됨(2026-07-06). EquipmentTemplate → Weapon/Armor/Accessory
 │                             구체 타입 생성(Slot으로 분기)
@@ -189,17 +194,24 @@ GameServer/
 │  │                        코드리뷰 F3(음수 killCount 클램프)·F4(MinQty>MaxQty 방어) 수정
 │  ├─ LootItem.cs         — 신규(Item 구체 타입 부재로 추가, DropPool과 동일한 보완 패턴)
 │  ├─ BattleLoop.cs       — 구현됨(스코프 축소판). 단일 Player vs 단일 Monster 라운드제 무한 루프.
-│  │                        Tick(내부, 단위 테스트 대상)/Run(공개, CancellationToken 없으면 진짜 무한)로 분리.
+│  │                        Tick(내부, 단위 테스트 대상)/RunAsync(공개, CancellationToken 없으면 진짜 무한)로 분리.
 │  │                        웨이브·스킬·부활 코스트는 미구현 — 아래 Stage 이하와 동일하게 다음 사이클 대상.
 │  │                        2026-07-06: 몬스터 처치로 경험치 획득 직후 PlayerLevelSystem.CheckLevelUp
-│  │                        호출 추가(레벨업 배선)
+│  │                        호출 추가(레벨업 배선). 코드리뷰 H2(2026-07-06): Run(Thread.Sleep)을
+│  │                        RunAsync(await Task.Delay)로 전환해 대기 중 스레드 미점유. 코드리뷰 H1:
+│  │                        PlayerLevelSystem을 생성자 주입받도록 변경(전역 static 결합 제거)
 │  ├─ MonsterTemplate.cs  — 구현됨(2026-07-06). 몬스터 1종의 순수 데이터 정의(JSON 이관 대비)
-│  ├─ MonsterTable.cs     — 구현됨(2026-07-06). 10종 하드코딩 마스터 데이터 + GetById 조회
+│  ├─ MonsterTable.cs     — 구현됨(2026-07-06), 코드리뷰 H1(2026-07-06)로 static class →
+│  │                        IMasterDataTable<int,MonsterTemplate> 구현 인스턴스로 전환.
+│  │                        CreateDefault()로 기본 10종 생성, 생성자로 커스텀 목록 주입 가능
 │  ├─ MonsterFactory.cs   — 구현됨(2026-07-06). MonsterTemplate → 즉시 투입 가능한 Monster 생성
 │  ├─ LevelTemplate.cs    — 구현됨(2026-07-06). 레벨 1개의 순수 데이터 정의(JSON 이관 대비)
-│  ├─ LevelTable.cs       — 구현됨(2026-07-06). 1~10레벨 하드코딩(누적 필요 경험치 + Hp/Atk/Def) + GetByLevel 조회
+│  ├─ LevelTable.cs       — 구현됨(2026-07-06), 코드리뷰 H1(2026-07-06)로 MonsterTable과 동일하게
+│  │                        인스턴스 전환(GetByLevel→GetById로 명칭 통일). MaxLevel도 All.Count 대신
+│  │                        All.Max(t=>t.Level)로 수정(레벨 갭에도 정확)
 │  ├─ PlayerLevelSystem.cs — 구현됨(2026-07-06). ApplyLevel(스탯 적용)/CheckLevelUp(임계치 판정,
-│  │                        한 번에 여러 레벨 점프도 처리, MaxLevel에서 정지)
+│  │                        한 번에 여러 레벨 점프도 처리, MaxLevel에서 정지). 코드리뷰 H1(2026-07-06)로
+│  │                        인스턴스 전환, IMasterDataTable<int,LevelTemplate> 생성자 주입
 │  ├─ Stage.cs            (신규 예정) — 스테이지 번호, 웨이브 목록, 보스 조건(N/N), 제한시간
 │  ├─ Wave.cs              (신규 예정) — 웨이브당 몬스터 스폰 목록
 │  ├─ MonsterSpawner.cs   (신규 예정) — 웨이브/보스 스폰 팩토리(MonsterTable에서 여러 종을 로테이션)
@@ -378,6 +390,30 @@ public LootData ProcessOfflineTime(Player player, Monster stageMonster, int offl
 - 신규 `tests/GameServer.Tests/Systems/LevelTableTests.cs`(6개)·`PlayerLevelSystemTests.cs`(5개),
   기존 `BattleLoopTests.cs`에 레벨업 배선 검증 테스트 1건 추가
 
+**2026-07-06 코드리뷰 H1/H2 수정 완료 (`code-review-orchestrator`, 종합 82/100 → REQUEST CHANGES):**
+테이블/팩토리 패턴 코드에 대한 아키텍처·보안·성능·스타일 4개 병렬 리뷰에서 나온 High 2건을
+리뷰어 제안대로(인터페이스+DI) 전체 수정. 상세: `_workspace/03_consolidated_report.md`.
+- 신규 `GameServer/Stats/IMasterDataTable.cs`: `IReadOnlyList<T> All`/`T GetById(TKey)` 계약.
+  Items/Systems 양쪽이 순환 의존 없이 구현하도록 "기반" 계층인 Stats에 배치
+- `Systems/MonsterTable.cs`·`Items/EquipmentTable.cs`·`Systems/LevelTable.cs`: static class →
+  위 인터페이스를 구현하는 인스턴스 클래스로 전환. 하드코딩 데이터는 `CreateDefault()` 정적
+  팩토리(정적 생성자 아님)에서만 생성 — 나중에 JSON 로딩으로 바꿔도 예외가
+  `TypeInitializationException`으로 래핑되지 않고, 생성자로 커스텀 데이터셋 주입도 가능(H1)
+- `LevelTable.GetByLevel`→`GetById`로 이름 통일, `MaxLevel`을 `All.Count` 대신
+  `All.Max(t=>t.Level)`로 수정(레벨 데이터에 갭이 있어도 정확)
+- `Systems/PlayerLevelSystem.cs`: static class → `IMasterDataTable<int,LevelTemplate>`를
+  생성자로 받는 인스턴스로 전환
+- `Systems/BattleLoop.cs`: `PlayerLevelSystem`을 생성자로 주입받도록 변경(기본 생성자는
+  `CreateDefault()`로 위임해 `new BattleLoop()` 호출부 하위 호환). `Run(Thread.Sleep)` →
+  `RunAsync(await Task.Delay)`로 전환해 대기 중 스레드를 점유하지 않도록 함(H2 — 다중 전투
+  동시 실행 시 스레드 기아 방지)
+- `GameServer/Main.cs`: 테이블/레벨시스템을 `CreateDefault()`로 명시적으로 생성해 사용,
+  `BattleLoop.Run` 호출을 `await new BattleLoop(levelSystem).RunAsync(...)`로 교체
+- 기존 6개 테스트 파일을 인스턴스 기반 호출로 갱신 + 인스턴스 독립성·`MaxLevel` 갭 처리·
+  커스텀 레벨 테이블 주입을 검증하는 신규 테스트 4건 추가(총 92개 통과)
+- Medium/Low 항목(조회 로직 3벌 중복, `CheckLevelUp` 중복 조회, 문서 주석 누락, JSON 이관 시
+  값 검증 등)은 의도적으로 이번 사이클 범위 밖으로 남김(§8 참고)
+
 **다음 구현 사이클 예정 (신규, 미착수):**
 - `Systems/Stage.cs`, `Systems/Wave.cs`, `Systems/MonsterSpawner.cs`, `Systems/ReviveCostCalculator.cs`
 - 스킬 정의 체계 + `BattleLoop.Tick`의 `t3s`(스킬 자동 시전) 분기, `AtkSpeed` 기반 실시간 쿨타임
@@ -419,14 +455,26 @@ dotnet run --project GameServer/GameServer.csproj
 (레벨업이 자동 회복을 겸하지 않는다는 점도 함께 관찰됨 — 최대치만 늘고 현재 HP는 그대로라
 직후 위험해질 수 있음, §8 참고).
 
+**실행 결과(2026-07-06, 코드리뷰 H1/H2 수정):** 솔루션 전체 0 warning / 0 error. `GameServer.Tests`
+**92/92** 통과(88개 + 인스턴스 독립성·`MaxLevel` 갭 처리·커스텀 테이블 주입 검증 신규 4건). 기존
+`IdleRpg.HarnessTests` 98/98 영향 없음. `Main.cs`가 `RunAsync`(비동기)로 정상 실행되며 기존과
+동일한 전투 페이스를 유지함을 육안으로 확인함.
+
 ## 8. 향후 확장 포인트 (미결 사항)
 
 - 부활 코스트 공식 확정 (골드 지수 증가 vs 고정 쿨다운) — `ReviveCostCalculator`
 - `Stage`/`Wave`/`MonsterSpawner`: 웨이브·보스 스폰(현재 `BattleLoop`은 단일 몬스터 재등장뿐,
   `MonsterTable`에서 여러 종을 로테이션하는 로직은 아직 없음), 스킬 자동 선택·발동(`t3s`),
   `AtkSpeed` 기반 실시간 쿨타임, DoT(지속 피해) 실행 루프
-- `MonsterTable`/`EquipmentTable`/`LevelTable`의 하드코딩 리스트를 JSON 파일 기반으로 이관
-  (각 템플릿은 이미 순수 데이터라 타입 변경 없이 로딩 방식만 교체하면 됨)
+- `MonsterTable`/`EquipmentTable`/`LevelTable`의 `CreateDefault()` 하드코딩 데이터를 JSON 파일
+  기반 로딩(`FromJson(path)` 등)으로 이관(코드리뷰 H1로 인터페이스+인스턴스 기반이 되어 로딩
+  방식만 추가하면 됨). 이관 시 값 검증(DropChance 범위, 음수 스탯, enum 미정의 값 등, 코드리뷰
+  보안 도메인 Low 4건) 계층 도입 필요
+- 세 테이블의 `GetById` 조회 로직 중복 제거(제네릭 헬퍼/베이스로 통합) + `Dictionary` 인덱스로
+  O(1)화, `PlayerLevelSystem.CheckLevelUp`의 중복 조회 제거(코드리뷰 Medium, 2026-07-06 리뷰에서
+  발견, 의도적으로 이번 사이클 범위 밖)
+- `MonsterTable`/`EquipmentTable`/`MonsterFactory`/`EquipmentFactory` 등 public static API에
+  CLAUDE.md 필수 Thread Safety/할당/블로킹 `<remarks>` 보강(코드리뷰 스타일 도메인 Medium)
 - 장비 밸런스 재조정(이번 사이클은 데모용 값) + 강화/제작 시 `Equipment.RandomModifiers`를
   실제로 채우는 로직(현재 `EquipmentFactory`는 항상 빈 채로 반환)
 - 레벨업 시 자동 회복 여부 결정(현재는 `MaxHp`만 늘고 `CurrentHp`는 그대로라 레벨업 직후

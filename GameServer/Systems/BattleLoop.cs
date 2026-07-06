@@ -2,7 +2,7 @@ using GameServer.Entities;
 
 namespace GameServer.Systems;
 
-/// <summary>한 틱의 전투 교환에서 발생한 사망 이벤트. <see cref="BattleLoop.Run"/>이 로그 출력에 사용한다.</summary>
+/// <summary>한 틱의 전투 교환에서 발생한 사망 이벤트. <see cref="BattleLoop.RunAsync"/>가 로그 출력에 사용한다.</summary>
 public enum BattleTickEvent
 {
     /// <summary>이번 틱에 특별한 사망 이벤트가 없었다.</summary>
@@ -23,19 +23,43 @@ public enum BattleTickEvent
 /// <remarks>
 /// <b>[성능 및 동시성 제약 조건]</b>
 /// <list type="bullet">
-/// <item><description><b>Thread Context:</b> <see cref="Run"/>은 호출한 스레드를 그대로 점유하는
-/// 동기 루프다. 별도 스레드에서 백그라운드로 돌리려면 호출 측이 <c>Task.Run</c> 등으로 감싸야 한다.</description></item>
-/// <item><description><b>Blocking 여부:</b> <see cref="Run"/>은 각 틱 사이 <see cref="Thread.Sleep(TimeSpan)"/>으로
-/// 동기 블로킹한다(Non-blocking 아님). 취소되지 않는 한 반환하지 않는다 — 기본 호출(토큰 미전달)은
-/// 의도적으로 진짜 무한 루프다.</description></item>
+/// <item><description><b>Thread Context:</b> <see cref="RunAsync"/>는 <c>await</c> 지점(<see cref="Task.Delay(TimeSpan)"/>)마다
+/// 호출 스레드를 반환하므로, 여러 전투를 동시에 <c>RunAsync</c>해도 전투당 스레드를 점유하지 않는다
+/// (코드리뷰 2026-07-06 H2 수정 — 이전에는 <c>Thread.Sleep</c> 동기 블로킹이라 전투당 스레드 1개가
+/// 항상 묶여 다중 전투 확장 시 스레드 풀 기아를 유발했다).</description></item>
+/// <item><description><b>Blocking 여부:</b> Non-blocking. <c>await</c> 동안 호출 스레드를 점유하지 않는다.
+/// 취소되지 않는 한 반환하지 않는 <see cref="Task"/>를 반환한다 — 기본 호출(토큰 미전달)은 의도적으로
+/// 진짜 무한 루프다.</description></item>
 /// <item><description><b>Thread Safety:</b> Not Thread-safe. 동일 <see cref="Player"/>/<see cref="Monster"/>
 /// 인스턴스를 여러 스레드에서 동시에 <see cref="Tick"/>하면 안 된다.</description></item>
 /// </list>
 /// </remarks>
 public sealed class BattleLoop
 {
-    /// <summary><see cref="Run"/> 호출 시 <c>tickInterval</c>을 지정하지 않으면 사용하는 기본 간격.</summary>
+    /// <summary><see cref="RunAsync"/> 호출 시 <c>tickInterval</c>을 지정하지 않으면 사용하는 기본 간격.</summary>
     private static readonly TimeSpan DefaultTickInterval = TimeSpan.FromMilliseconds(500);
+
+    private readonly PlayerLevelSystem _levelSystem;
+
+    /// <summary>하드코딩된 기본 레벨 테이블(<see cref="PlayerLevelSystem.CreateDefault"/>)을 사용하는 루프를 생성한다.</summary>
+    public BattleLoop() : this(PlayerLevelSystem.CreateDefault())
+    {
+    }
+
+    /// <summary>
+    /// 지정한 레벨업 시스템을 사용하는 루프를 생성한다.
+    /// </summary>
+    /// <param name="levelSystem">몬스터 처치 시 레벨업 판정에 사용할 시스템</param>
+    /// <remarks>
+    /// 코드리뷰 2026-07-06 H1 수정: 이전에는 <c>Tick</c>이 static <c>PlayerLevelSystem</c>을 통해
+    /// 전역 static <c>LevelTable</c>에 직접 결합되어 있었다. 이제 생성자로 주입받아, 레벨 규칙이나
+    /// 테스트용 데이터셋을 교체할 수 있다.
+    /// </remarks>
+    public BattleLoop(PlayerLevelSystem levelSystem)
+    {
+        ArgumentNullException.ThrowIfNull(levelSystem);
+        _levelSystem = levelSystem;
+    }
 
     /// <summary>
     /// player와 monster 사이의 라운드제 전투 교환 1회를 수행한다.
@@ -66,7 +90,7 @@ public sealed class BattleLoop
             var loot = monster.Rewards.GenerateLoot(1);
             player.AddExp(loot.TotalExp);
             player.AddGold(loot.TotalGold);
-            PlayerLevelSystem.CheckLevelUp(player); // 경험치 획득 직후 레벨업 판정·적용(LevelTable 기반)
+            _levelSystem.CheckLevelUp(player); // 경험치 획득 직후 레벨업 판정·적용
             monster.RestoreResources();
             return BattleTickEvent.MonsterDefeated;
         }
@@ -92,13 +116,19 @@ public sealed class BattleLoop
     /// <param name="monster">전투에 참여하는 몬스터(사망 시 같은 인스턴스로 재등장)</param>
     /// <param name="tickInterval">틱 사이 대기 시간. 생략 시 500ms. <see cref="TimeSpan.Zero"/>면 대기 없이 즉시 다음 틱으로 진행(테스트용)</param>
     /// <param name="cancellationToken">루프를 중단시킬 토큰. 프로덕션 호출(예: <c>Main.cs</c>)은 이를 생략해 진짜 무한 루프로 동작시킨다</param>
+    /// <returns>취소되기 전까지(또는 영구히) 완료되지 않는 <see cref="Task"/></returns>
     /// <remarks>
     /// <b>[성능 및 동시성 제약 조건]</b>
     /// <list type="bullet">
-    /// <item><description><b>Blocking 여부:</b> 동기 블로킹. 호출한 스레드를 취소 전까지(또는 영구히) 점유한다.</description></item>
+    /// <item><description><b>Blocking 여부:</b> Non-blocking. <c>await Task.Delay</c>로 대기하는 동안
+    /// 호출 스레드를 스레드 풀에 반환한다(코드리뷰 H2 — 이전 <c>Thread.Sleep</c> 버전은 대기 내내
+    /// 스레드 하나를 점유해 다중 전투 동시 실행 시 스레드 기아를 유발했다).</description></item>
+    /// <item><description><c>tickInterval</c> 대기는 취소 토큰을 즉시 관찰하지 않는다(이전 동기 버전과
+    /// 동일한 특성 유지) — 취소 여부는 매 틱 시작 시점에만 확인하므로, 취소 후 최대 한 틱 간격만큼
+    /// 늦게 종료될 수 있다.</description></item>
     /// </list>
     /// </remarks>
-    public void Run(Player player, Monster monster, TimeSpan? tickInterval = null, CancellationToken cancellationToken = default)
+    public async Task RunAsync(Player player, Monster monster, TimeSpan? tickInterval = null, CancellationToken cancellationToken = default)
     {
         var interval = tickInterval ?? DefaultTickInterval;
         var deltaTime = (float)interval.TotalSeconds;
@@ -110,7 +140,7 @@ public sealed class BattleLoop
 
             if (interval > TimeSpan.Zero)
             {
-                Thread.Sleep(interval);
+                await Task.Delay(interval);
             }
         }
     }

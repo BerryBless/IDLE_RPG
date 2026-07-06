@@ -6,16 +6,30 @@ namespace GameServer.Systems;
 /// 몬스터 마스터 데이터 테이블. 현재는 10종을 C#으로 하드코딩해 보관한다.
 /// </summary>
 /// <remarks>
-/// <b>[JSON 이관 대비]</b> <see cref="All"/>의 초기화 리스트는 이 파일에만 격리되어 있다. 나중에
-/// JSON 파일 기반으로 옮길 때는 이 프로퍼티의 초기화식만
-/// <c>JsonSerializer.Deserialize&lt;List&lt;MonsterTemplate&gt;&gt;(File.ReadAllText(path))</c>로
-/// 교체하면 되고, <see cref="MonsterTemplate"/>·<see cref="GetById"/>를 사용하는 다른 코드는 전혀
-/// 바뀔 필요가 없다.
+/// <b>[JSON 이관 대비]</b> 하드코딩 데이터는 <see cref="CreateDefault"/> 정적 팩토리 메서드
+/// 안에서만 만들어진다(정적 생성자가 아니므로 실패 시 예외가 그대로 전파된다). 나중에 JSON
+/// 파일 기반으로 옮길 때는 <c>MonsterTable.FromJson(path)</c> 같은 별도 팩토리를 추가하기만
+/// 하면 되고, <see cref="IMasterDataTable{TKey,T}"/>를 사용하는 다른 코드는 전혀 바뀔 필요가
+/// 없다(코드리뷰 2026-07-06 H1 수정 — 이전에는 static class + 정적 필드 초기화식으로 고정되어
+/// 있어 테스트에서 대체 데이터셋을 주입할 수 없었다).
 /// </remarks>
-public static class MonsterTable
+public sealed class MonsterTable : IMasterDataTable<int, MonsterTemplate>
 {
     /// <summary>등록된 전체 몬스터 종 목록(난이도 순).</summary>
-    public static IReadOnlyList<MonsterTemplate> All { get; } = new List<MonsterTemplate>
+    public IReadOnlyList<MonsterTemplate> All { get; }
+
+    /// <summary>주어진 템플릿 목록으로 테이블을 구성한다.</summary>
+    /// <param name="templates">등록할 몬스터 템플릿 목록</param>
+    public MonsterTable(IReadOnlyList<MonsterTemplate> templates)
+    {
+        ArgumentNullException.ThrowIfNull(templates);
+        All = templates;
+    }
+
+    /// <summary>하드코딩된 기본 10종 데이터로 테이블을 생성한다.</summary>
+    public static MonsterTable CreateDefault() => new(BuildDefaultTemplates());
+
+    private static List<MonsterTemplate> BuildDefaultTemplates() => new()
     {
         new()
         {
@@ -86,20 +100,20 @@ public static class MonsterTable
     };
 
     /// <summary>지정한 ID의 몬스터 템플릿을 찾는다.</summary>
-    /// <param name="monsterId">조회할 몬스터 ID</param>
+    /// <param name="id">조회할 몬스터 ID</param>
     /// <returns>일치하는 <see cref="MonsterTemplate"/></returns>
     /// <exception cref="KeyNotFoundException">일치하는 몬스터가 없는 경우 — 마스터 데이터 설정
     /// 오류를 조용히 넘기지 않고 즉시 실패시킨다.</exception>
-    public static MonsterTemplate GetById(int monsterId)
+    public MonsterTemplate GetById(int id)
     {
         foreach (var template in All)
         {
-            if (template.MonsterId == monsterId)
+            if (template.MonsterId == id)
             {
                 return template;
             }
         }
 
-        throw new KeyNotFoundException($"MonsterId {monsterId}에 해당하는 몬스터 템플릿을 찾을 수 없습니다.");
+        throw new KeyNotFoundException($"MonsterId {id}에 해당하는 몬스터 템플릿을 찾을 수 없습니다.");
     }
 }

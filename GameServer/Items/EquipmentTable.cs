@@ -6,16 +6,30 @@ namespace GameServer.Items;
 /// 장비 마스터 데이터 테이블. 현재는 무기·방어구·장신구 각 5종(총 15종)을 C#으로 하드코딩해 보관한다.
 /// </summary>
 /// <remarks>
-/// <b>[JSON 이관 대비]</b> <see cref="All"/>의 초기화 리스트는 이 파일에만 격리되어 있다. 나중에
-/// JSON 파일 기반으로 옮길 때는 이 프로퍼티의 초기화식만
-/// <c>JsonSerializer.Deserialize&lt;List&lt;EquipmentTemplate&gt;&gt;(File.ReadAllText(path))</c>로
-/// 교체하면 되고, <see cref="EquipmentTemplate"/>·<see cref="GetById"/>를 사용하는 다른 코드는
-/// 전혀 바뀔 필요가 없다.
+/// <b>[JSON 이관 대비]</b> 하드코딩 데이터는 <see cref="CreateDefault"/> 정적 팩토리 메서드
+/// 안에서만 만들어진다(정적 생성자가 아니므로 실패 시 예외가 그대로 전파된다). 나중에 JSON
+/// 파일 기반으로 옮길 때는 <c>EquipmentTable.FromJson(path)</c> 같은 별도 팩토리를 추가하기만
+/// 하면 되고, <see cref="IMasterDataTable{TKey,T}"/>를 사용하는 다른 코드는 전혀 바뀔 필요가
+/// 없다(코드리뷰 2026-07-06 H1 수정 — 이전에는 static class + 정적 필드 초기화식으로 고정되어
+/// 있어 테스트에서 대체 데이터셋을 주입할 수 없었다).
 /// </remarks>
-public static class EquipmentTable
+public sealed class EquipmentTable : IMasterDataTable<int, EquipmentTemplate>
 {
     /// <summary>등록된 전체 장비 종 목록(슬롯별 티어 오름차순).</summary>
-    public static IReadOnlyList<EquipmentTemplate> All { get; } = new List<EquipmentTemplate>
+    public IReadOnlyList<EquipmentTemplate> All { get; }
+
+    /// <summary>주어진 템플릿 목록으로 테이블을 구성한다.</summary>
+    /// <param name="templates">등록할 장비 템플릿 목록</param>
+    public EquipmentTable(IReadOnlyList<EquipmentTemplate> templates)
+    {
+        ArgumentNullException.ThrowIfNull(templates);
+        All = templates;
+    }
+
+    /// <summary>하드코딩된 기본 15종(무기·방어구·장신구 각 5종) 데이터로 테이블을 생성한다.</summary>
+    public static EquipmentTable CreateDefault() => new(BuildDefaultTemplates());
+
+    private static List<EquipmentTemplate> BuildDefaultTemplates() => new()
     {
         // ===== 무기 (4001~4005) =====
         new()
@@ -116,20 +130,20 @@ public static class EquipmentTable
     };
 
     /// <summary>지정한 ID의 장비 템플릿을 찾는다.</summary>
-    /// <param name="itemMetaId">조회할 아이템 메타 ID</param>
+    /// <param name="id">조회할 아이템 메타 ID</param>
     /// <returns>일치하는 <see cref="EquipmentTemplate"/></returns>
     /// <exception cref="KeyNotFoundException">일치하는 장비가 없는 경우 — 마스터 데이터 설정
     /// 오류를 조용히 넘기지 않고 즉시 실패시킨다.</exception>
-    public static EquipmentTemplate GetById(int itemMetaId)
+    public EquipmentTemplate GetById(int id)
     {
         foreach (var template in All)
         {
-            if (template.ItemMetaId == itemMetaId)
+            if (template.ItemMetaId == id)
             {
                 return template;
             }
         }
 
-        throw new KeyNotFoundException($"ItemMetaId {itemMetaId}에 해당하는 장비 템플릿을 찾을 수 없습니다.");
+        throw new KeyNotFoundException($"ItemMetaId {id}에 해당하는 장비 템플릿을 찾을 수 없습니다.");
     }
 }

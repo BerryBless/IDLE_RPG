@@ -110,7 +110,7 @@ public class BattleLoopTests
     }
 
     [Fact]
-    public void Run_WithCancellationToken_StopsWithoutHanging()
+    public async Task RunAsync_WithCancellationToken_StopsWithoutHanging()
     {
         // HP를 충분히 크게 잡아 취소 시점까지 어느 쪽도 죽지 않게 하고, 취소 후 정상 반환되는지만 확인.
         var player = MakePlayer(hp: 1_000_000, atk: 1);
@@ -118,9 +118,9 @@ public class BattleLoopTests
         var loop = new BattleLoop();
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
 
-        loop.Run(player, monster, TimeSpan.FromMilliseconds(1), cts.Token);
+        await loop.RunAsync(player, monster, TimeSpan.FromMilliseconds(1), cts.Token);
 
-        // 취소 후 정상 반환된 것 자체가 핵심 검증(무한 루프에 갇히지 않음).
+        // 취소 후 정상 반환된 것 자체가 핵심 검증(무한 루프에 갇히지 않음, 스레드도 점유하지 않음 — 코드리뷰 H2).
         // 20ms 동안 1ms 간격이면 최소 한 틱은 진행되어 양쪽 다 약간의 피해를 입었을 것이다.
         Assert.True(monster.FinalStats.CurrentHp < monster.FinalStats.MaxHp);
         Assert.True(player.FinalStats.CurrentHp < player.FinalStats.MaxHp);
