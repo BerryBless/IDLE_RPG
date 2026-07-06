@@ -47,18 +47,18 @@ flowchart TB
     subgraph ONLINE [온라인 실시간 전투 · 완전 자동 · 틱 시뮬레이션]
         direction TB
 
-        s1["웨이브 스폰<br/>(다중 몬스터 N마리)"]
+        s1["웨이브 스폰<br/>(다중 몬스터 N마리)<br/>*몬스터 마스터 데이터(MonsterTable, 10종) 구현됨 — 웨이브당 다중 스폰·로테이션 자체는 여전히 MonsterSpawner(다음 사이클) 대상*"]
 
         subgraph LOOP [전투 틱 루프 · deltaTime 구동]
             direction TB
             t0["Δt 진행 (deltaTime)"]
             t1["쿨타임 · 공속 · 마나 회복 갱신<br/>*마나 재생 프리미티브 구현됨: Entity.Update*"]
             t2{"행동 선택<br/>마나 충분 & 스킬 쿨 완료?<br/>*게이팅 프리미티브 구현됨: Entity.TryConsumeMana*"}
-            t3s["스킬 자동 시전<br/>(마나 소모)<br/>*스킬 선택·발동 루프 자체는 BattleLoop 신규 구현 대상(다음 사이클)*"]
-            t3a["평타<br/>(공속 쿨 소모)"]
+            t3s["스킬 자동 시전<br/>(마나 소모)<br/>*스킬 정의·선택 로직은 여전히 다음 사이클: BattleLoop.Tick은 현재 평타(t3a)만 수행*"]
+            t3a["평타<br/>(공속 쿨 소모)<br/>*BattleLoop.Tick 구현됨 — 단, 공속 쿨타임 없이 매 틱 1회 라운드제 교환으로 단순화*"]
             t4["피해량 연산<br/>CalcFinalDamage (스탯 + 버프/디버프)<br/>*장비 PercentMult 소스 무관 독립 곱연산(코드리뷰 F8 수정)*"]
             t5["버프/디버프 지속시간 갱신<br/>BuffManager.Update(Δt) — 구현됨<br/>*DoT(지속 피해)는 후속 사이클: 현재 StatusEffect는 스탯 모디파이어 부여만 지원*"]
-            c1{"캐릭터 파티 전멸?<br/>*개별 Entity 사망(CurrentHp 0 이하) 시 Update 전체 정지(코드리뷰 F6, Entity.IsAlive) — 파티 전멸 판정 자체는 BattleLoop 신규 구현 대상*"}
+            c1{"캐릭터 파티 전멸?<br/>*BattleLoop.Tick 구현됨(GameServer/Systems/BattleLoop.cs) — 단, 단일 플레이어 대상이라 '파티' 개념 없음.<br/>사망 시 FAIL/GROW로 분기하지 않고 즉시 무료 부활로 단순화(부활 코스트는 여전히 다음 사이클)*"}
             c2{"몬스터 전멸?"}
 
             t0 --> t1 --> t2
@@ -75,7 +75,7 @@ flowchart TB
 
         c1 -- 전멸 --> FAIL
         c2 -- "전멸(처치)" --> r1["일반 보상 획득<br/>골드 / 경험치 / 아이템 드롭(DropTable)<br/>*ItemMetaId별 수량 집계로 할당 최소화(코드리뷰 F11)*"]
-        r1 --> r2["경험치 누적 → 레벨업 판정<br/>(캐릭터 레벨 · 스탯 상승, 스테이지 등반과 별개)"]
+        r1 --> r2["경험치 누적 → 레벨업 판정<br/>(캐릭터 레벨 · 스탯 상승, 스테이지 등반과 별개)<br/>*구현됨: PlayerLevelSystem.CheckLevelUp + LevelTable(1~10레벨, 코드리뷰 H1로 인스턴스 기반). BattleLoop.Tick에 배선 완료*"]
         r2 --> w1{"보스 등장 조건?<br/>(웨이브 N/N 완료)"}
 
         w1 -- No --> s1
@@ -130,11 +130,20 @@ flowchart TB
 `GameServer.Tests`(41개 테스트)로 검증됨. `t3s`의 스킬 발동 루프 자체, `s1/b1/w1/b4`(웨이브·보스·스폰·등반),
 DoT는 여전히 다음 사이클 대상.
 
+**구현 완료 갱신(2026-07-05 BattleLoop 사이클):** `t0`~`c2`의 라운드제 골격(`GameServer/Systems/BattleLoop.cs`)이
+구현되어 `Main.cs`가 실제로 무한히 반복 실행된다. 단, 스코프를 의도적으로 좁혔다 —
+단일 플레이어 vs 단일 몬스터(웨이브·다중 몬스터 없음), 공속 쿨타임 없이 매 틱 1회 라운드제 교환
+(`t3s` 스킬 분기 없이 항상 `t3a` 평타만), 몬스터 처치 시 같은 인스턴스가 `RestoreResources()`로
+즉시 재등장(`MonsterSpawner` 없음), 플레이어 사망 시 `FAIL`/`GROW` 서브그래프 대신 즉시 무료
+부활로 단순화(부활 코스트는 여전히 미구현). `s1/b1/w1/b4`(웨이브·보스·스폰·등반)와 `t3s`(스킬)는
+여전히 다음 사이클 대상.
+
 ## 4. 컴포넌트 구조
 
 다이어그램의 각 노드가 요구하는 컴포넌트. **2026-07-05 TDD 사이클에서 스텁 구현이 완료**된 항목은
-"구현됨"으로 표시. `BattleLoop`/`Stage`/`Wave`/`MonsterSpawner`/`ReviveCostCalculator`는 여전히
-**다음 구현 사이클의 청사진**(실제 파일 아님).
+"구현됨"으로 표시. `BattleLoop`은 2026-07-05 후속 사이클에서 스코프를 좁혀 구현 완료(아래 참고).
+`Stage`/`Wave`/`MonsterSpawner`/`ReviveCostCalculator`는 여전히 **다음 구현 사이클의 청사진**
+(실제 파일 아님).
 
 ```
 GameServer/
@@ -143,9 +152,21 @@ GameServer/
 │  ├─ BaseStats.cs       — 구현됨. Mana/ManaRegen 필드 추가. ※ operator+는 여전히 미구현
 │  │                        스텁(NotImplementedException) — 파이프라인이 필드를 직접 읽어 호출되지
 │  │                        않으므로 런타임 영향은 없음(코드리뷰 F9)
-│  └─ FinalStats.cs      — 구현됨. MaxMana/CurrentMana/ManaRegen + AttackScaling 필드 추가
-│                           (AttackScaling은 코드리뷰 F1 수정으로 추가: 무기 배율을 온라인·오프라인이
-│                           동일하게 읽도록 함)
+│  ├─ FinalStats.cs      — 구현됨. MaxMana/CurrentMana/ManaRegen + AttackScaling 필드 추가
+│  │                         (AttackScaling은 코드리뷰 F1 수정으로 추가: 무기 배율을 온라인·오프라인이
+│  │                         동일하게 읽도록 함)
+│  └─ IMasterDataTable.cs — 신규(코드리뷰 H1, 2026-07-06). Monster/Equipment/LevelTable이 공통
+│                            구현하는 조회 인터페이스(GetById/All). Stats에 둔 이유: Items/Systems
+│                            양쪽이 순환 의존 없이 구현할 수 있는 "기반, 무의존" 계층이기 때문
+├─ Items/
+│  ├─ EquipmentTemplate.cs — 구현됨(2026-07-06). 장비 1종의 순수 데이터 정의(JSON 이관 대비,
+│  │                          MonsterTemplate과 동일 패턴)
+│  ├─ EquipmentTable.cs   — 구현됨(2026-07-06), 코드리뷰 H1(2026-07-06)로 static class →
+│  │                          IMasterDataTable<int,EquipmentTemplate> 구현 인스턴스로 전환.
+│  │                          무기·방어구·장신구 각 5종(총 15종) 하드코딩
+│  │                          마스터 데이터 + GetById 조회
+│  └─ EquipmentFactory.cs — 구현됨(2026-07-06). EquipmentTemplate → Weapon/Armor/Accessory
+│                             구체 타입 생성(Slot으로 분기)
 ├─ Combat/
 │  ├─ BuffManager.cs      — 구현됨. ApplyEffect/RemoveEffect/Update/GetAllActiveModifiers
 │  └─ StatusEffect.cs     — 구현됨. Tick/IsExpired/GetModifiers + Modifiers 필드 추가
@@ -165,15 +186,35 @@ GameServer/
 │  ├─ BattleManager.cs    — 구현 완료(이전 사이클) — 틱 루프에서 t4 호출.
 │  │                        코드리뷰 F1로 CalcFinalDamage가 FinalStats.AttackScaling을 자동으로
 │  │                        곱하도록 수정, attackScaling 파라미터는 "추가 배율"로 의미 축소
-│  ├─ OfflineProgressionManager.cs — 구현됨. 기대 DPS 공식 기반 killCount 환산.
-│  │                        코드리뷰 F1(AttackScaling 누락)·F2(음수 offlineSeconds 클램프) 수정
+│  ├─ OfflineProgressionManager.cs — 구현됨(기대 DPS 공식 기반 killCount 환산, 코드리뷰
+│  │                        F1(AttackScaling 누락)·F2(음수 offlineSeconds 클램프) 수정)이나
+│  │                        **2026-07-06 임시 주석 처리됨**(Main.cs가 온라인 BattleLoop에만 집중;
+│  │                        재활성화 방법은 §6 참고)
 │  ├─ RewardComponent.cs  — 구현됨. GenerateLoot(킬수·드롭테이블 확률 롤), 결정적 RNG 주입 생성자 추가.
 │  │                        코드리뷰 F3(음수 killCount 클램프)·F4(MinQty>MaxQty 방어) 수정
 │  ├─ LootItem.cs         — 신규(Item 구체 타입 부재로 추가, DropPool과 동일한 보완 패턴)
-│  ├─ BattleLoop.cs       (신규 예정) — 온라인 틱 루프 스케줄러 (t0~c2), deltaTime 구동
+│  ├─ BattleLoop.cs       — 구현됨(스코프 축소판). 단일 Player vs 단일 Monster 라운드제 무한 루프.
+│  │                        Tick(내부, 단위 테스트 대상)/RunAsync(공개, CancellationToken 없으면 진짜 무한)로 분리.
+│  │                        웨이브·스킬·부활 코스트는 미구현 — 아래 Stage 이하와 동일하게 다음 사이클 대상.
+│  │                        2026-07-06: 몬스터 처치로 경험치 획득 직후 PlayerLevelSystem.CheckLevelUp
+│  │                        호출 추가(레벨업 배선). 코드리뷰 H2(2026-07-06): Run(Thread.Sleep)을
+│  │                        RunAsync(await Task.Delay)로 전환해 대기 중 스레드 미점유. 코드리뷰 H1:
+│  │                        PlayerLevelSystem을 생성자 주입받도록 변경(전역 static 결합 제거)
+│  ├─ MonsterTemplate.cs  — 구현됨(2026-07-06). 몬스터 1종의 순수 데이터 정의(JSON 이관 대비)
+│  ├─ MonsterTable.cs     — 구현됨(2026-07-06), 코드리뷰 H1(2026-07-06)로 static class →
+│  │                        IMasterDataTable<int,MonsterTemplate> 구현 인스턴스로 전환.
+│  │                        CreateDefault()로 기본 10종 생성, 생성자로 커스텀 목록 주입 가능
+│  ├─ MonsterFactory.cs   — 구현됨(2026-07-06). MonsterTemplate → 즉시 투입 가능한 Monster 생성
+│  ├─ LevelTemplate.cs    — 구현됨(2026-07-06). 레벨 1개의 순수 데이터 정의(JSON 이관 대비)
+│  ├─ LevelTable.cs       — 구현됨(2026-07-06), 코드리뷰 H1(2026-07-06)로 MonsterTable과 동일하게
+│  │                        인스턴스 전환(GetByLevel→GetById로 명칭 통일). MaxLevel도 All.Count 대신
+│  │                        All.Max(t=>t.Level)로 수정(레벨 갭에도 정확)
+│  ├─ PlayerLevelSystem.cs — 구현됨(2026-07-06). ApplyLevel(스탯 적용)/CheckLevelUp(임계치 판정,
+│  │                        한 번에 여러 레벨 점프도 처리, MaxLevel에서 정지). 코드리뷰 H1(2026-07-06)로
+│  │                        인스턴스 전환, IMasterDataTable<int,LevelTemplate> 생성자 주입
 │  ├─ Stage.cs            (신규 예정) — 스테이지 번호, 웨이브 목록, 보스 조건(N/N), 제한시간
 │  ├─ Wave.cs              (신규 예정) — 웨이브당 몬스터 스폰 목록
-│  ├─ MonsterSpawner.cs   (신규 예정) — 웨이브/보스 스폰 팩토리
+│  ├─ MonsterSpawner.cs   (신규 예정) — 웨이브/보스 스폰 팩토리(MonsterTable에서 여러 종을 로테이션)
 │  └─ ReviveCostCalculator.cs (신규 예정) — 부활 코스트 공식 (§8 미결)
 tests/
 └─ GameServer.Tests/      — 신규. xUnit, GameServer ProjectReference, InternalsVisibleTo 부여받음
@@ -185,25 +226,49 @@ tests/
 
 ## 5. 핵심 API
 
-**`BattleLoop`(다음 사이클 제안, 미구현):**
+**`BattleLoop`(2026-07-05 구현 완료 — `GameServer/Systems/BattleLoop.cs`, 스코프 축소판):**
 
 ```csharp
 namespace GameServer.Systems;
 
-/// <summary>
-/// 온라인 상태에서 스테이지 하나의 실시간 전투를 deltaTime 단위로 진행시키는 자동 전투 루프.
-/// </summary>
-/// <remarks>
-/// <b>[성능 및 동시성 제약 조건]</b>
-/// - Thread Context: 게임 서버의 틱 스케줄러 스레드에서 호출됨. 동기 블로킹(DB/File I/O) 금지.
-/// - Memory Policy: 웨이브당 몬스터 리스트는 풀링 검토 대상(§8).
-/// - Concurrency: 플레이어별 단일 BattleLoop 인스턴스 가정, 외부 동기화 불필요.
-/// </remarks>
+public enum BattleTickEvent { None, MonsterDefeated, PlayerDefeated }
+
 public sealed class BattleLoop
 {
-    public void Tick(float deltaTime) => throw new NotImplementedException();
+    // 1회 교환(순수 로직, sleep/취소 없음) — 단위 테스트 대상이라 internal로 노출
+    internal BattleTickEvent Tick(Player player, Monster monster, float deltaTime)
+    {
+        player.Update(deltaTime);
+        monster.Update(deltaTime);
+
+        monster.TakeDamage(BattleManager.Instance.CalcFinalDamage(player, monster));
+        if (!monster.IsAlive)
+        {
+            var loot = monster.Rewards.GenerateLoot(1);
+            player.AddExp(loot.TotalExp);
+            player.AddGold(loot.TotalGold);
+            monster.RestoreResources(); // 같은 인스턴스로 즉시 재등장 — MonsterSpawner 없음
+            return BattleTickEvent.MonsterDefeated;
+        }
+
+        player.TakeDamage(BattleManager.Instance.CalcFinalDamage(monster, player));
+        if (!player.IsAlive)
+        {
+            player.RestoreResources(); // 즉시 무료 부활 — ReviveCostCalculator는 다음 사이클
+            return BattleTickEvent.PlayerDefeated;
+        }
+
+        return BattleTickEvent.None;
+    }
+
+    // cancellationToken 미전달(기본값) 시 취소 불가 → 진짜 무한 루프. Main.cs는 토큰 없이 호출한다.
+    public void Run(Player player, Monster monster, TimeSpan? tickInterval = null,
+        CancellationToken cancellationToken = default) { /* Tick 반복 + Thread.Sleep */ }
 }
 ```
+
+`t3s`(스킬 자동 시전)는 정의된 스킬 체계 자체가 없어 여전히 미구현이라, `Tick`은 항상 평타(`t3a`)만
+수행한다. 공속(`AtkSpeed`) 기반 쿨타임도 아직 없어 매 틱 1회 라운드제 교환으로 단순화했다.
 
 **`OfflineProgressionManager`(이번 사이클 구현 완료 — `GameServer/Systems/OfflineProgressionManager.cs`):**
 
@@ -267,9 +332,127 @@ public LootData ProcessOfflineTime(Player player, Monster stageMonster, int offl
 - 신규 `tests/GameServer.Tests/Items/EquipmentInventoryTests.cs` + 기존 테스트 파일에 회귀
   테스트 8건 추가/수정(총 58개 통과)
 
+**2026-07-05 BattleLoop 사이클 완료 (신규/수정):**
+- 신규 `GameServer/Systems/BattleLoop.cs`: 단일 Player vs 단일 Monster 라운드제 무한 루프
+  (`Tick`은 internal 순수 로직, `Run`은 `CancellationToken` 미전달 시 진짜 무한 루프)
+- 신규 `tests/GameServer.Tests/Systems/BattleLoopTests.cs`(4개 — 처치/생존/사망부활/취소 케이스)
+- `GameServer/Main.cs`: 예제에 `BaseStats.Hp`(플레이어 100·몬스터 30) + `Def`(몬스터 5) 부여,
+  `RestoreResources()` 호출 추가, 1회성 `CalcFinalDamage` 호출을 `new BattleLoop().Run(player, monster)`로 교체
+
+**2026-07-06 OfflineProgressionManager 임시 주석 처리:**
+현재 사이클은 `Main.cs`의 온라인 `BattleLoop`에만 집중하기로 해, 사용하지 않는
+`OfflineProgressionManager`를 삭제 대신 블록 주석(`/* */`)으로 컴파일 대상에서 제외했다.
+- `GameServer/Systems/OfflineProgressionManager.cs`: 클래스 전체를 `/* */`로 감싸고 재활성화
+  방법을 파일 상단에 명시
+- `tests/GameServer.Tests/Systems/OfflineProgressionManagerTests.cs`: 동일하게 전체 주석 처리
+  (`GameServer.Tests` 63개 → 57개로 일시 감소, 삭제 아님)
+- `GameServer/Entities/Entity.cs`·`GameServer/Systems/BattleManager.cs`: 댕글링 `cref` 경고(CS1574)
+  방지를 위해 `<see cref="OfflineProgressionManager"/>` 링크를 평문 텍스트로 임시 변경
+- **재활성화 방법:** 위 두 `.cs` 파일의 `/* */` 블록을 해제하고, 두 `cref` 텍스트를 다시
+  `<see cref="...OfflineProgressionManager"/>` 형태로 되돌리면 된다.
+
+**2026-07-06 몬스터 마스터 데이터 테이블(10종) 완료:**
+- 신규 `GameServer/Systems/MonsterTemplate.cs`: 몬스터 1종의 순수 데이터 정의(전부 기본
+  타입·단순 리스트라 `System.Text.Json`으로 그대로 (역)직렬화 가능 — JSON 이관 대비)
+- 신규 `GameServer/Systems/MonsterTable.cs`: 슬라임~리치 10종을 난이도 순으로 하드코딩,
+  `GetById`는 미존재 ID에 `KeyNotFoundException`. 나중에 JSON 이관 시 `All`의 초기화식만
+  교체하면 되도록 하드코딩을 이 파일 하나로 격리
+- 신규 `GameServer/Systems/MonsterFactory.cs`: `MonsterTemplate` → `UpdateFinalStats`/
+  `RestoreResources`까지 끝낸 즉시 투입 가능한 `Monster` 인스턴스 생성
+- `GameServer/Main.cs`: 하드코딩 몬스터 생성부를 `MonsterFactory.CreateMonster(MonsterTable.GetById(2003))`
+  (고블린)로 교체
+- 신규 `tests/GameServer.Tests/Systems/MonsterTableTests.cs`(4개)·`MonsterFactoryTests.cs`(5개)
+
+**2026-07-06 장비 마스터 데이터 테이블(무기·방어구·장신구 각 5종, 총 15종) 완료:**
+- 신규 `GameServer/Items/EquipmentTemplate.cs`: 장비 1종의 순수 데이터 정의(`MonsterTemplate`과
+  동일 패턴, JSON 이관 대비). `AttackScaling`은 `Slot`이 `Weapon`일 때만 의미 있음
+- 신규 `GameServer/Items/EquipmentTable.cs`: 15종 하드코딩, `GetById`는 미존재 ID에
+  `KeyNotFoundException`(`MonsterTable`과 동일 계약)
+- 신규 `GameServer/Items/EquipmentFactory.cs`: `EquipmentTemplate.Slot`에 따라 `Weapon`/`Armor`/
+  `Accessory` 중 알맞은 구체 타입을 생성, `BaseModifiers`는 복사해 전달(인스턴스 간 리스트 공유 방지)
+- `GameServer/Main.cs`: 하드코딩 무기/방어구 생성부를 테이블 기반으로 교체하고 장신구도 신규 장착
+  (기존 방어구가 비정상적으로 Atk+65를 주던 데모용 값이 사라져, 이제 몬스터와 실제로 데미지를
+  주고받는 자연스러운 전투 페이스로 바뀜 — 밸런스 조정은 후속 대상)
+- 신규 `tests/GameServer.Tests/Items/EquipmentTableTests.cs`(5개)·`EquipmentFactoryTests.cs`(5개)
+
+**2026-07-06 플레이어 레벨 테이블(10레벨) + 레벨업 배선 완료:**
+- 신규 `GameServer/Systems/LevelTemplate.cs`: 레벨 1개의 순수 데이터 정의(`MonsterTemplate`과
+  동일 패턴, JSON 이관 대비)
+- 신규 `GameServer/Systems/LevelTable.cs`: 1~10레벨 하드코딩(누적 필요 경험치 + Hp/Atk/Def),
+  `GetByLevel`은 미존재 레벨에 `KeyNotFoundException`
+- 신규 `GameServer/Systems/PlayerLevelSystem.cs`: `ApplyLevel`(레벨 스탯을 `BaseStats`에 반영 +
+  `UpdateFinalStats` 호출)·`CheckLevelUp`(임계치 판정, 한 번에 여러 레벨 점프도 정확히 처리,
+  `MaxLevel`에서 정지)
+- `GameServer/Systems/BattleLoop.cs`: `Tick`이 몬스터 처치로 경험치를 얻은 직후
+  `PlayerLevelSystem.CheckLevelUp` 호출(레벨업 실제 배선), `LogTick`에 `player.Level` 표시 추가
+- `GameServer/Main.cs`: 플레이어 초기 스탯 세팅(`BaseStats.Hp = 100` 하드코딩)을
+  `PlayerLevelSystem.ApplyLevel(player, 1)`로 교체
+- 신규 `tests/GameServer.Tests/Systems/LevelTableTests.cs`(6개)·`PlayerLevelSystemTests.cs`(5개),
+  기존 `BattleLoopTests.cs`에 레벨업 배선 검증 테스트 1건 추가
+
+**2026-07-06 코드리뷰 H1/H2 수정 완료 (`code-review-orchestrator`, 종합 82/100 → REQUEST CHANGES):**
+테이블/팩토리 패턴 코드에 대한 아키텍처·보안·성능·스타일 4개 병렬 리뷰에서 나온 High 2건을
+리뷰어 제안대로(인터페이스+DI) 전체 수정. 상세: `_workspace/03_consolidated_report.md`.
+- 신규 `GameServer/Stats/IMasterDataTable.cs`: `IReadOnlyList<T> All`/`T GetById(TKey)` 계약.
+  Items/Systems 양쪽이 순환 의존 없이 구현하도록 "기반" 계층인 Stats에 배치
+- `Systems/MonsterTable.cs`·`Items/EquipmentTable.cs`·`Systems/LevelTable.cs`: static class →
+  위 인터페이스를 구현하는 인스턴스 클래스로 전환. 하드코딩 데이터는 `CreateDefault()` 정적
+  팩토리(정적 생성자 아님)에서만 생성 — 나중에 JSON 로딩으로 바꿔도 예외가
+  `TypeInitializationException`으로 래핑되지 않고, 생성자로 커스텀 데이터셋 주입도 가능(H1)
+- `LevelTable.GetByLevel`→`GetById`로 이름 통일, `MaxLevel`을 `All.Count` 대신
+  `All.Max(t=>t.Level)`로 수정(레벨 데이터에 갭이 있어도 정확)
+- `Systems/PlayerLevelSystem.cs`: static class → `IMasterDataTable<int,LevelTemplate>`를
+  생성자로 받는 인스턴스로 전환
+- `Systems/BattleLoop.cs`: `PlayerLevelSystem`을 생성자로 주입받도록 변경(기본 생성자는
+  `CreateDefault()`로 위임해 `new BattleLoop()` 호출부 하위 호환). `Run(Thread.Sleep)` →
+  `RunAsync(await Task.Delay)`로 전환해 대기 중 스레드를 점유하지 않도록 함(H2 — 다중 전투
+  동시 실행 시 스레드 기아 방지)
+- `GameServer/Main.cs`: 테이블/레벨시스템을 `CreateDefault()`로 명시적으로 생성해 사용,
+  `BattleLoop.Run` 호출을 `await new BattleLoop(levelSystem).RunAsync(...)`로 교체
+- 기존 6개 테스트 파일을 인스턴스 기반 호출로 갱신 + 인스턴스 독립성·`MaxLevel` 갭 처리·
+  커스텀 레벨 테이블 주입을 검증하는 신규 테스트 4건 추가(총 92개 통과)
+- Medium/Low 항목(조회 로직 3벌 중복, `CheckLevelUp` 중복 조회, 문서 주석 누락, JSON 이관 시
+  값 검증 등)은 의도적으로 이번 사이클 범위 밖으로 남김(§8 참고)
+
+**2026-07-06 코드리뷰 Medium/Low 수정 완료 (advisor 자문으로 스코프 정제):**
+JSON 로더가 아직 없는 상태에서의 값 검증·경로 보호·enum 검증, 그리고 다중 전투 동시 실행을
+전제로 한 `LogTick`/`InstanceId` 최적화처럼 "존재하지 않는 미래를 위한" 항목은 의도적으로
+제외하고, 지금 바로 실체가 있는 항목만 수정했다.
+- 신규 `GameServer/Stats/MasterDataTable.cs`: `IMasterDataTable<TKey,T>` 공통 기반 추상 클래스.
+  생성자에서 `Dictionary<TKey,T>` 인덱스를 1회 구축해 `GetById`를 O(1)로 만들고(코드리뷰 Medium —
+  세 테이블에 중복돼 있던 foreach 선형 탐색 제거), 부수 효과로 `ToDictionary`가 중복 키를 생성
+  시점에 즉시 `ArgumentException`으로 걸러낸다(코드리뷰 Low 보안 항목 중 "중복 ID" 부분을
+  JSON 로더 없이도 지금 해소 — "갭이 있는 레벨"에 대한 `CheckLevelUp` 내성은 여전히 미해결이라
+  §8에 유지)
+- `Systems/MonsterTable.cs`·`Items/EquipmentTable.cs`·`Systems/LevelTable.cs`: 위 기반 클래스를
+  상속하도록 전환(`GetById`/`All` 중복 구현 제거), ID 대역 규약(2000/3000/4000/5000/6000번대)을
+  클래스 `<remarks>`에 명문화(코드리뷰 스타일 Low)
+- 신규 `GameServer/Systems/PlayerFactory.cs`: `new Player{}` → `ApplyLevel` → `RestoreResources`
+  3단계 수동 호출 시 마지막 호출을 빠뜨리면 `CurrentHp=0`으로 즉사 상태가 되는 함정을 제거
+  (`MonsterFactory`/`EquipmentFactory`와 대칭, 코드리뷰 아키텍처 Medium). `ApplyLevel` 자체는
+  전투 중 레벨업에도 재사용되므로 건드리지 않음(자동 회복 부작용 방지)
+- `Systems/MonsterFactory.cs`: `CreateMonster`→`Create`로 이름 통일(`EquipmentFactory.Create`와
+  네이밍 관례 일치, 코드리뷰 스타일 Low)
+- `Systems/MonsterTable.cs`·`Items/EquipmentTable.cs`·`Systems/MonsterFactory.cs`·
+  `Items/EquipmentFactory.cs`·`Systems/PlayerLevelSystem.cs`: CLAUDE.md 필수 Thread Safety/
+  Memory Allocation/Blocking `<remarks>` 보강(코드리뷰 스타일 Medium)
+- `GameServer/Main.cs`: `PlayerFactory.Create`/`MonsterFactory.Create` 사용으로 교체,
+  `AccountId = 000`(8진 리터럴처럼 보이는 모호한 표기)→`0`, `BigNumber` TODO 주석을 트리거
+  조건 명시형으로 보강(코드리뷰 스타일 Low), 장비 장착 후 `UpdateFinalStats`/`RestoreResources`
+  재호출 추가(팩토리 도입으로 레벨 적용 시점이 장비 장착보다 앞으로 당겨지며 생긴 간극 보정)
+- 기존 5개 테스트 파일에 중복 키 fail-fast 검증 3건 + 팩토리 리네이밍 반영, 신규
+  `tests/GameServer.Tests/Systems/PlayerFactoryTests.cs`(4개) 추가(총 99개 통과)
+- 의도적으로 남긴 항목(모두 §8로 이동): JSON 값 검증/경로 보호/enum 검증(로더 자체가 없음),
+  `LogTick`의 매 틱 `Console.WriteLine`(다중 전투 동시 실행 전제, 현재는 단일 데모 루프뿐이라
+  변경 시 관측 가능한 데모 출력만 바뀌고 실익이 없음), `CheckLevelUp`의 이중 조회(Dictionary
+  인덱스 도입으로 양쪽 다 O(1)이 되어 실질적 이득 없음), `LevelTable` 갭 데이터에 대한
+  `CheckLevelUp` 내성(설계 결정이 필요한 사안), `EquipmentTemplate.AttackScaling` god-data 소지 +
+  `EquipmentFactory`의 `SlotType` switch 확장점(현재 규모에서 리뷰어가 직접 "당장 불필요"라고
+  명시), `MonsterFactory`/`EquipmentFactory`의 `Guid.NewGuid()` 할당(미래 스포너 최적화 대상)
+
 **다음 구현 사이클 예정 (신규, 미착수):**
-- `Systems/BattleLoop.cs`, `Systems/Stage.cs`, `Systems/Wave.cs`,
-  `Systems/MonsterSpawner.cs`, `Systems/ReviveCostCalculator.cs`
+- `Systems/Stage.cs`, `Systems/Wave.cs`, `Systems/MonsterSpawner.cs`, `Systems/ReviveCostCalculator.cs`
+- 스킬 정의 체계 + `BattleLoop.Tick`의 `t3s`(스킬 자동 시전) 분기, `AtkSpeed` 기반 실시간 쿨타임
 
 ## 7. 빌드 검증
 
@@ -284,10 +467,71 @@ dotnet run --project GameServer/GameServer.csproj
 (`total damage = 99` 유지 — 무기 배율 적용 메커니즘은 수동 파라미터 전달에서
 `FinalStats.AttackScaling` 자동 반영으로 바뀌었으나 결과값은 동일).
 
+**실행 결과(2026-07-05, BattleLoop 사이클):** 솔루션 전체 0 warning / 0 error. `GameServer.Tests`
+63/63 통과(F6/F8/F11까지의 58개 + `BattleLoopTests` 4개 + 기존 테스트 조정 반영). 기존
+`IdleRpg.HarnessTests` 98/98 영향 없음. `Main.cs`는 더 이상 1회성 `total damage` 출력이 아니라
+`BattleLoop.Run`으로 무한 반복되며, 실제로 몇 초간 실행해 몬스터 처치·재등장·경험치/골드 누적
+로그가 계속 출력되는 것을 육안으로 확인함(Ctrl+C로 종료).
+
+**실행 결과(2026-07-06, 오프라인 주석 처리 + 몬스터 테이블 10종):** 솔루션 전체 0 warning / 0 error.
+`GameServer.Tests` **66/66** 통과(63개에서 `OfflineProgressionManagerTests` 6개 제외한 57개 +
+`MonsterTableTests` 4개 + `MonsterFactoryTests` 5개). 기존 `IdleRpg.HarnessTests` 98/98 영향 없음.
+`Main.cs`가 `MonsterTable.GetById(2003)`(고블린)로 몬스터를 생성하며, 실행 시 고블린의
+`ExpDrop=6`/`GoldDrop=8`이 누적 로그에 정확히 반영되는 것을 육안으로 확인함.
+
+**실행 결과(2026-07-06, 장비 테이블 15종):** 솔루션 전체 0 warning / 0 error. `GameServer.Tests`
+**76/76** 통과(66개 + `EquipmentTableTests` 5개 + `EquipmentFactoryTests` 5개). 기존
+`IdleRpg.HarnessTests` 98/98 영향 없음. `Main.cs`가 무기·방어구·장신구 전부 `EquipmentTable`에서
+생성하며, 실행 시 플레이어와 고블린이 서로 데미지를 주고받는 전투가 정상 진행되는 것을 육안으로 확인함.
+
+**실행 결과(2026-07-06, 플레이어 레벨 테이블 + 레벨업 배선):** 솔루션 전체 0 warning / 0 error.
+`GameServer.Tests` **88/88** 통과(76개 + `LevelTableTests` 6개 + `PlayerLevelSystemTests` 5개 +
+`BattleLoopTests` 신규 1개). 기존 `IdleRpg.HarnessTests` 98/98 영향 없음. 실행 시 누적 경험치가
+20을 넘는 순간 `Lv.2`로 승급하고 `MaxHp`가 100→130으로 반영되는 것을 콘솔 로그로 직접 확인함
+(레벨업이 자동 회복을 겸하지 않는다는 점도 함께 관찰됨 — 최대치만 늘고 현재 HP는 그대로라
+직후 위험해질 수 있음, §8 참고).
+
+**실행 결과(2026-07-06, 코드리뷰 H1/H2 수정):** 솔루션 전체 0 warning / 0 error. `GameServer.Tests`
+**92/92** 통과(88개 + 인스턴스 독립성·`MaxLevel` 갭 처리·커스텀 테이블 주입 검증 신규 4건). 기존
+`IdleRpg.HarnessTests` 98/98 영향 없음. `Main.cs`가 `RunAsync`(비동기)로 정상 실행되며 기존과
+동일한 전투 페이스를 유지함을 육안으로 확인함.
+
+**실행 결과(2026-07-06, 코드리뷰 Medium/Low 수정):** 솔루션 전체 0 warning / 0 error.
+`GameServer.Tests` **99/99** 통과(92개 + 중복 키 fail-fast 검증 3건 + `PlayerFactoryTests` 4건).
+기존 `IdleRpg.HarnessTests` 98/98 영향 없음. `Main.cs`를 몇 초간 직접 실행해 `PlayerFactory.Create`로
+생성된 플레이어가 정상적으로 전투를 진행하고(HP 100에서 시작해 데미지 교환), 고블린을 처치해
+로그가 정확히 출력되는 것을 육안으로 확인함.
+
 ## 8. 향후 확장 포인트 (미결 사항)
 
 - 부활 코스트 공식 확정 (골드 지수 증가 vs 고정 쿨다운) — `ReviveCostCalculator`
-- `BattleLoop`/`Stage`/`Wave`/`MonsterSpawner`: 웨이브·보스 스폰, 스킬 자동 선택·발동(`t3s`), DoT(지속 피해) 실행 루프
+- `Stage`/`Wave`/`MonsterSpawner`: 웨이브·보스 스폰(현재 `BattleLoop`은 단일 몬스터 재등장뿐,
+  `MonsterTable`에서 여러 종을 로테이션하는 로직은 아직 없음), 스킬 자동 선택·발동(`t3s`),
+  `AtkSpeed` 기반 실시간 쿨타임, DoT(지속 피해) 실행 루프
+- `MonsterTable`/`EquipmentTable`/`LevelTable`의 `CreateDefault()` 하드코딩 데이터를 JSON 파일
+  기반 로딩(`FromJson(path)` 등)으로 이관(코드리뷰 H1로 인터페이스+인스턴스 기반이 되어 로딩
+  방식만 추가하면 됨). 이관 시 값 검증(DropChance 범위, 음수 스탯, enum 미정의 값 등, 경로 조작·
+  파일 크기 제한, 코드리뷰 보안 도메인 Low 4건)과 `LevelTable`의 레벨 갭 데이터에 대한
+  `CheckLevelUp` 내성(현재는 갭이 있으면 `player.Level+1`이 존재하지 않아 `KeyNotFoundException`
+  으로 크래시 — 갭을 건너뛸지 막을지는 설계 결정 필요) 계층 도입 필요. 세 테이블의 조회 로직
+  중복·`Dictionary` 인덱스화·문서 주석 누락은 2026-07-06 코드리뷰 Medium/Low 수정에서 이미 해소
+  (`MasterDataTable<TKey,T>` 공통 기반 + 생성 시 중복 키 fail-fast)
+- `BattleLoop.LogTick`의 매 틱 `Console.WriteLine`(다중 전투 동시 실행 시 콘솔 락 경합 우려로
+  코드리뷰 Medium 지적) — 현재는 단일 데모 루프뿐이라 실익 없이 데모 출력만 바뀌므로 의도적으로
+  보류. 실제로 여러 전투를 동시 실행하는 설계가 나오면 이벤트 전용 로깅/버퍼링으로 교체 검토
+- `EquipmentTemplate.AttackScaling`이 `Weapon` 슬롯에서만 의미 있는 필드로 남아있는 god-data
+  소지, `EquipmentFactory`의 `SlotType` switch가 슬롯 타입 추가 시 유일한 편집점인 점(코드리뷰
+  아키텍처 Low) — 리뷰어도 "현재 규모에서 당장 리팩토링 필요 없음"이라 명시, 슬롯 종류가
+  늘어날 때 재검토
+- `MonsterFactory.Create`/`EquipmentFactory.Create`의 `Guid.NewGuid()` + 문자열 보간 `InstanceId`
+  할당(코드리뷰 성능 Low) — 몬스터가 재사용(`RestoreResources`)되고 킬마다 재생성되지 않는 현재
+  구조에선 GC 압력이 없음. `MonsterSpawner` 도입으로 킬마다 재스폰하는 구조가 되면 재검토
+- 장비 밸런스 재조정(이번 사이클은 데모용 값) + 강화/제작 시 `Equipment.RandomModifiers`를
+  실제로 채우는 로직(현재 `EquipmentFactory`는 항상 빈 채로 반환)
+- 레벨업 시 자동 회복 여부 결정(현재는 `MaxHp`만 늘고 `CurrentHp`는 그대로라 레벨업 직후
+  체력 비율이 급락할 수 있음) + 10레벨 초과 성장 곡선(현재 `LevelTable`은 10에서 정지)
+- 루팅된 `AcquiredItems`를 저장할 플레이어 인벤토리(현재 `Player`는 `Equipment`만 있고 일반
+  아이템 보관소가 없어, `BattleLoop`은 콘솔 로그만 출력하고 저장하지 않음)
 - 웨이브당 몬스터 수·보스 조건(`N/N`)을 스테이지별로 가변화하는 데이터 스키마(JSON/ScriptableObject 등)
 - `BigNumber` struct 활성화(현재 `double` 별칭) 시 `EquipmentInventory`/`Entity` 등 연쇄 영향 검토
 - 아이템 마스터 데이터 조회 시스템(`LootItem`을 실제 `Weapon`/`Armor`/`Accessory`로 구체화)

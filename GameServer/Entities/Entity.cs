@@ -213,7 +213,8 @@ public abstract class Entity
     /// <returns><see cref="FinalStats.AttackScaling"/>에 반영될 배율</returns>
     /// <remarks>
     /// 코드리뷰 F1 수정: 이전에는 무기 배율이 <see cref="Systems.BattleManager.CalcFinalDamage"/> 호출부에서
-    /// 수동으로 전달되어 <see cref="Systems.OfflineProgressionManager"/>는 이 값을 전혀 알지 못했다.
+    /// 수동으로 전달되어 OfflineProgressionManager(2026-07-06 임시 주석 처리, <c>Systems/OfflineProgressionManager.cs</c>
+    /// 참고)는 이 값을 전혀 알지 못했다.
     /// 이제 <see cref="UpdateFinalStats"/>가 이 훅으로 <see cref="FinalStats.AttackScaling"/>을 채워
     /// 온라인·오프라인 모든 데미지 경로가 동일한 값을 읽는다.
     /// </remarks>

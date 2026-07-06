@@ -384,3 +384,202 @@ classDiagram
 
 신규 클래스(`BattleLoop`/`Stage`/`Wave`/`MonsterSpawner`/`ReviveCostCalculator`)는 아직 코드로
 존재하지 않으며, `plan/battle_system_0705.md` §8의 다음 사이클 항목으로 남아 있다.
+
+## 9. 부록: 2026-07-06 구현 상태 추가 갱신
+
+§8(2026-07-05)은 그대로 두고, 이후 사이클(무한 전투 루프 `BattleLoop`, 몬스터·장비·레벨 마스터
+데이터 테이블, 코드리뷰 H1/H2 수정)로 추가된 변경만 여기에 덧붙인다. **정정:** §8 말미의
+"`BattleLoop`는 아직 코드로 존재하지 않는다"는 이제 사실이 아니다 — `BattleLoop`는 구현
+완료됐고(스코프는 단일 Player vs 단일 Monster 라운드제로 축소), `Stage`/`Wave`/
+`MonsterSpawner`/`ReviveCostCalculator`만 여전히 미구현이다.
+
+```mermaid
+classDiagram
+    %% ===== Stats (§8 대비 신규) =====
+    class IMasterDataTable~TKey,T~ {
+        <<interface>>
+        +IReadOnlyList~T~ All
+        +GetById(TKey) T
+    }
+
+    %% ===== Systems: 몬스터 마스터 데이터 (신규) =====
+    class MonsterTemplate {
+        +int MonsterId
+        +string Name
+        +int Level
+        +BigNumber Hp
+        +BigNumber Atk
+        +BigNumber Def
+        +BigNumber Recovery
+        +double AtkSpeed
+        +double CritProb
+        +double CritDmg
+        +BigNumber ExpDrop
+        +BigNumber GoldDrop
+        +List~DropPool~ DropTable
+        +List~StatModifier~ Affixes
+    }
+    class MonsterTable {
+        +IReadOnlyList~MonsterTemplate~ All
+        +MonsterTable(IReadOnlyList~MonsterTemplate~)
+        +CreateDefault() MonsterTable (static)
+        +GetById(int) MonsterTemplate
+    }
+    class MonsterFactory {
+        +CreateMonster(MonsterTemplate) Monster (static)
+    }
+
+    %% ===== Items: 장비 마스터 데이터 (신규) =====
+    class EquipmentTemplate {
+        +int ItemMetaId
+        +string Name
+        +SlotType Slot
+        +float AttackScaling
+        +List~StatModifier~ BaseModifiers
+    }
+    class EquipmentTable {
+        +IReadOnlyList~EquipmentTemplate~ All
+        +EquipmentTable(IReadOnlyList~EquipmentTemplate~)
+        +CreateDefault() EquipmentTable (static)
+        +GetById(int) EquipmentTemplate
+    }
+    class EquipmentFactory {
+        +Create(EquipmentTemplate) Equipment (static)
+    }
+
+    %% ===== Systems: 플레이어 레벨 마스터 데이터 (신규) =====
+    class LevelTemplate {
+        +int Level
+        +BigNumber RequiredExp
+        +BigNumber Hp
+        +BigNumber Atk
+        +BigNumber Def
+    }
+    class LevelTable {
+        +IReadOnlyList~LevelTemplate~ All
+        +int MaxLevel
+        +LevelTable(IReadOnlyList~LevelTemplate~)
+        +CreateDefault() LevelTable (static)
+        +GetById(int) LevelTemplate
+    }
+    class PlayerLevelSystem {
+        +PlayerLevelSystem(IMasterDataTable~int,LevelTemplate~)
+        +CreateDefault() PlayerLevelSystem (static)
+        +ApplyLevel(Player, int) void
+        +CheckLevelUp(Player) bool
+    }
+
+    %% ===== Systems: 전투 루프 (신규) =====
+    class BattleTickEvent {
+        <<enumeration>>
+        None
+        MonsterDefeated
+        PlayerDefeated
+    }
+    class BattleLoop {
+        +BattleLoop()
+        +BattleLoop(PlayerLevelSystem)
+        ~Tick(Player, Monster, float) BattleTickEvent
+        +RunAsync(Player, Monster, TimeSpan?, CancellationToken) Task
+    }
+
+    %% ===== 기존 타입 중 임시 주석 처리된 것 =====
+    class OfflineProgressionManager {
+        <<2026-07-06 임시 주석 처리>>
+        +ProcessOfflineTime(Player, Monster, int) LootData
+    }
+
+    MonsterTable ..|> IMasterDataTable : implements
+    EquipmentTable ..|> IMasterDataTable : implements
+    LevelTable ..|> IMasterDataTable : implements
+    MonsterTable o-- MonsterTemplate
+    EquipmentTable o-- EquipmentTemplate
+    LevelTable o-- LevelTemplate
+    MonsterFactory ..> MonsterTemplate : reads
+    MonsterFactory ..> Monster : creates
+    EquipmentFactory ..> EquipmentTemplate : reads
+    EquipmentFactory ..> Equipment : creates
+    PlayerLevelSystem o-- IMasterDataTable : depends on (생성자 주입)
+    PlayerLevelSystem ..> Player : modifies BaseStats/Level
+    BattleLoop o-- PlayerLevelSystem : depends on (생성자 주입, 기본값 CreateDefault)
+    BattleLoop ..> Player : Tick 인자
+    BattleLoop ..> Monster : Tick 인자
+    BattleLoop ..> BattleManager : CalcFinalDamage 호출
+    BattleLoop ..> BattleTickEvent : Tick 반환값
+```
+
+### §8 대비 델타 (2026-07-06)
+
+| 구분 | §8(2026-07-05) | 현재(2026-07-06) | 사유 |
+|------|-----------------|--------------------|------|
+| `MonsterTable`/`EquipmentTable`/`LevelTable` | 존재하지 않음 | **신규 — `IMasterDataTable` 구현 인스턴스** | 몬스터 10종·장비 15종·레벨 10종 마스터 데이터 테이블화 + 코드리뷰 H1(2026-07-06): static class로 시작했다가 인터페이스+인스턴스로 전환(JSON 이관·테스트 주입 대비) |
+| `MonsterFactory`/`EquipmentFactory`/`PlayerLevelSystem` | 존재하지 않음 | **신규 — Template→도메인 객체 생성/적용** | 위 테이블과 함께 도입 |
+| `BattleLoop` | §8에서 "아직 코드로 존재하지 않음"으로 명시 | **구현 완료(스코프 축소판)** | 단일 Player vs 단일 Monster 라운드제 무한 루프. 코드리뷰 H2(2026-07-06): `Run`(`Thread.Sleep`)을 `RunAsync`(`await Task.Delay`)로 전환해 스레드 미점유 |
+| `OfflineProgressionManager` | 구현됨으로 표시 | **임시 주석 처리(컴파일 제외)** | `Main.cs`가 온라인 `BattleLoop`에만 집중하기로 해 삭제 대신 블록 주석 처리(재활성화 방법은 `plan/battle_system_0705.md` §6 참고) |
+
+`Stage`/`Wave`/`MonsterSpawner`/`ReviveCostCalculator`는 여전히 코드로 존재하지 않으며,
+`plan/battle_system_0705.md` §8의 다음 사이클 항목으로 남아 있다.
+
+## 10. 부록: 2026-07-06 구현 상태 추가 갱신 (코드리뷰 Medium/Low 수정)
+
+§8·§9는 그대로 두고, 같은 날 진행된 코드리뷰 Medium/Low 수정 사이클(상세: `plan/battle_system_0705.md`
+§6의 "2026-07-06 코드리뷰 Medium/Low 수정 완료" 항목)로 바뀐 구조만 여기에 덧붙인다. §9의
+`MonsterTable`/`EquipmentTable`/`LevelTable`이 `IMasterDataTable`을 직접 구현하던 것에서, 아래처럼
+공통 기반 클래스를 매개로 구현하는 형태로 바뀌었다.
+
+```mermaid
+classDiagram
+    %% ===== Stats (§9 대비 신규) =====
+    class IMasterDataTable~TKey,T~ {
+        <<interface>>
+        +IReadOnlyList~T~ All
+        +GetById(TKey) T
+    }
+    class MasterDataTable~TKey,T~ {
+        <<abstract>>
+        +IReadOnlyList~T~ All
+        #MasterDataTable(IReadOnlyList~T~, Func~T,TKey~, string)
+        +GetById(TKey) T
+    }
+
+    %% ===== §9 대비 변경: 세 테이블이 이제 MasterDataTable을 상속 =====
+    class MonsterTable {
+        +MonsterTable(IReadOnlyList~MonsterTemplate~)
+        +CreateDefault() MonsterTable (static)
+    }
+    class EquipmentTable {
+        +EquipmentTable(IReadOnlyList~EquipmentTemplate~)
+        +CreateDefault() EquipmentTable (static)
+    }
+    class LevelTable {
+        +int MaxLevel
+        +LevelTable(IReadOnlyList~LevelTemplate~)
+        +CreateDefault() LevelTable (static)
+    }
+
+    %% ===== Systems: 플레이어 초기 생성 팩토리 (신규) =====
+    class PlayerFactory {
+        +Create(string, int, int, PlayerLevelSystem) Player (static)
+    }
+
+    MasterDataTable ..|> IMasterDataTable : implements
+    MonsterTable --|> MasterDataTable : extends
+    EquipmentTable --|> MasterDataTable : extends
+    LevelTable --|> MasterDataTable : extends
+    PlayerFactory ..> PlayerLevelSystem : ApplyLevel 위임
+    PlayerFactory ..> Player : creates
+```
+
+### §9 대비 델타 (2026-07-06 Medium/Low)
+
+| 구분 | §9(2026-07-06 H1/H2 직후) | 현재(2026-07-06 Medium/Low 수정 후) | 사유 |
+|------|---------------------------|--------------------------------------|------|
+| `GetById` 조회 로직 | `MonsterTable`/`EquipmentTable`/`LevelTable` 각자 `foreach` 선형 탐색을 중복 구현 | **신규 `MasterDataTable<TKey,T>` 공통 추상 기반**으로 통합, 생성자에서 `Dictionary` 인덱스 1회 구축 → `GetById` O(1) | 코드리뷰 아키텍처·스타일·성능 도메인이 공통으로 지적한 3벌 중복 제거. 부수 효과로 `ToDictionary`가 중복 키를 생성 시점에 즉시 `ArgumentException`으로 검출(보안 Low 항목 중 "중복 ID" 부분 해소) |
+| `MonsterFactory` 메서드명 | `CreateMonster` | **`Create`** | `EquipmentFactory.Create`와 명명 관례 통일(스타일 Low) |
+| 플레이어 초기 생성 | 호출부가 `new Player{}`→`ApplyLevel`→`RestoreResources` 3단계를 직접 순서대로 호출 | **신규 `PlayerFactory.Create`**가 3단계를 캡슐화 | `MonsterFactory`/`EquipmentFactory`와 대칭(아키텍처 Medium) — `RestoreResources` 누락 시 `CurrentHp=0`으로 즉사 상태가 되는 함정 제거. `ApplyLevel` 자체는 전투 중 레벨업에도 재사용되므로 손대지 않음 |
+| 문서 주석 | 테이블/팩토리 public API에 CLAUDE.md 필수 Thread Safety/할당/블로킹 `<remarks>` 누락 | **보강 완료** | 스타일 Medium |
+
+이번 수정에서 의도적으로 남긴 항목(JSON 로더 부재 상태의 값 검증·경로 보호·enum 검증, 다중 전투
+동시 실행을 전제로 한 `BattleLoop.LogTick` 최적화, `LevelTable` 갭 데이터에 대한 `CheckLevelUp`
+내성, `EquipmentTemplate.AttackScaling`의 god-data 소지)은 `plan/battle_system_0705.md` §8에
+사유와 함께 기록돼 있다.
