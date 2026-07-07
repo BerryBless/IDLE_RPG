@@ -116,6 +116,7 @@ public sealed class BattleLoop
     /// <param name="monster">전투에 참여하는 몬스터(사망 시 같은 인스턴스로 재등장)</param>
     /// <param name="tickInterval">틱 사이 대기 시간. 생략 시 500ms. <see cref="TimeSpan.Zero"/>면 대기 없이 즉시 다음 틱으로 진행(테스트용)</param>
     /// <param name="cancellationToken">루프를 중단시킬 토큰. 프로덕션 호출(예: <c>Main.cs</c>)은 이를 생략해 진짜 무한 루프로 동작시킨다</param>
+    /// <param name="sink">이벤트를 기록할 싱크. 생략(null)하면 아무 것도 기록하지 않는다.</param>
     /// <returns>취소되기 전까지(또는 영구히) 완료되지 않는 <see cref="Task"/></returns>
     /// <remarks>
     /// <b>[성능 및 동시성 제약 조건]</b>
@@ -128,7 +129,8 @@ public sealed class BattleLoop
     /// 늦게 종료될 수 있다.</description></item>
     /// </list>
     /// </remarks>
-    public async Task RunAsync(Player player, Monster monster, TimeSpan? tickInterval = null, CancellationToken cancellationToken = default)
+    public async Task RunAsync(Player player, Monster monster, TimeSpan? tickInterval = null,
+        CancellationToken cancellationToken = default, GameEventSink? sink = null)
     {
         var interval = tickInterval ?? DefaultTickInterval;
         var deltaTime = (float)interval.TotalSeconds;
@@ -136,7 +138,7 @@ public sealed class BattleLoop
         while (!cancellationToken.IsCancellationRequested)
         {
             var result = Tick(player, monster, deltaTime);
-            LogTick(result, player, monster);
+            LogTick(result, player, sink);
 
             if (interval > TimeSpan.Zero)
             {
@@ -145,27 +147,27 @@ public sealed class BattleLoop
         }
     }
 
-    /// <summary>이번 틱의 결과를 콘솔에 출력한다(데모 목적 — 실제 로깅 인프라 연동은 후속 사이클 대상).</summary>
+    /// <summary>이번 틱의 결과를 <paramref name="sink"/>에 기록한다. sink가 null이면 아무 것도 기록하지 않는다.</summary>
     /// <remarks>
-    /// 코드리뷰(2026-07-07 종합 리뷰, 아키텍처 High) 수정: 처치/사망 이벤트 포맷은
-    /// <see cref="BattleEventLogger.Format"/> 하나로 통합한다. 이전에는 이 메서드가 같은
-    /// <see cref="BattleTickEvent"/>를 별도 switch로 다시 포맷했고 문자열도 서로 달라(예: "몬스터
-    /// 재등장" 접미사 유무), 새 이벤트 종류 추가 시 두 곳을 모두 고쳐야 하는 중복이 있었다. HP 상태
-    /// 줄(<see cref="BattleTickEvent.None"/>)은 <see cref="BattleEventLogger"/>가 다중 플레이어
-    /// 샤드 규모(콘솔 과다 출력 방지)를 위해 의도적으로 비워두는 부분이라, 단일 페어 데모인
-    /// <see cref="RunAsync"/>에서만 여기서 별도로 출력한다.
+    /// 코드리뷰(2026-07-07 관측성 전환): 콘솔 출력을 제거하고 <see cref="GameEventSink"/> 기반
+    /// 메트릭+NDJSON 로그로 대체했다. HP 상태(<see cref="BattleTickEvent.None"/>)는 이벤트가 아니라
+    /// 매 틱 연속 상태이므로 기록하지 않는다.
     /// </remarks>
-    private static void LogTick(BattleTickEvent result, Player player, Monster monster)
+    private static void LogTick(BattleTickEvent result, Player player, GameEventSink? sink)
     {
-        var formatted = BattleEventLogger.Format(player.InstanceId, result, player);
-        if (!string.IsNullOrEmpty(formatted))
+        if (sink is null)
         {
-            Console.WriteLine(formatted);
             return;
         }
 
-        Console.WriteLine(
-            $"[전투] Player HP {player.FinalStats.CurrentHp:F1}/{player.FinalStats.MaxHp:F1} | " +
-            $"Monster HP {monster.FinalStats.CurrentHp:F1}/{monster.FinalStats.MaxHp:F1}");
+        switch (result)
+        {
+            case BattleTickEvent.MonsterDefeated:
+                sink.RecordMonsterDefeated(player.InstanceId, player.Level, player.CurrentExp, player.CurrentGold);
+                break;
+            case BattleTickEvent.PlayerDefeated:
+                sink.RecordPlayerDefeated(player.InstanceId);
+                break;
+        }
     }
 }
