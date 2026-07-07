@@ -194,21 +194,23 @@ public sealed class RaidEncounter
     }
 
     /// <summary>피해 채널을 소비하며 순수 판정 코어를 순차 구동하는 액터 루프.</summary>
-    /// <param name="logWriter">기존 단일 로그 소비자(<c>Main.cs</c>의 <c>logConsumerTask</c>)와 공유하는
-    /// 콘솔 로그 채널의 writer</param>
+    /// <param name="sink">레이드 이벤트(처치/실패)와 보스 HP% 게이지를 기록할 싱크</param>
     /// <param name="cancellationToken">협조적 취소 토큰(Main의 <c>CancellationTokenSource</c>와 동일 토큰 전달)</param>
     /// <remarks>
     /// <b>Blocking 여부:</b> Non-blocking. <c>ReadAllAsync</c>의 <c>await</c>에서만 대기하며 호출
-    /// 스레드를 점유하지 않는다 — <c>Main.cs</c>의 <c>logConsumerTask</c>와 동일한 관용구.
+    /// 스레드를 점유하지 않는다. 코드리뷰(2026-07-07 관측성 전환): 콘솔 로그 채널 대신
+    /// <see cref="GameEventSink"/>로 메트릭+NDJSON을 기록한다. 액터가 <c>boss.CurrentHp</c>의 유일한
+    /// 리더이므로, 매 스텝 후 HP% 게이지를 기록하는 것도 이 루프에서만 안전하게 할 수 있다.
     /// </remarks>
-    public async Task RunAsync(ChannelWriter<string> logWriter, CancellationToken cancellationToken)
+    public async Task RunAsync(GameEventSink sink, CancellationToken cancellationToken)
     {
         try
         {
             await foreach (var request in _damageChannel.Reader.ReadAllAsync(cancellationToken))
             {
-                Emit(ApplyDamage(request), logWriter);
-                Emit(CheckDeadline(_clock()), logWriter); // 처치 직후라면 위에서 이미 데드라인이 재시작된 뒤라 안전
+                Emit(ApplyDamage(request), sink);
+                Emit(CheckDeadline(_clock()), sink); // 처치 직후라면 위에서 이미 데드라인이 재시작된 뒤라 안전
+                sink.RecordRaidBossHpPercent(BossHpPercent());
             }
         }
         catch (OperationCanceledException)
@@ -221,14 +223,26 @@ public sealed class RaidEncounter
         }
     }
 
-    private void Emit(RaidStepResult step, ChannelWriter<string> logWriter)
+    /// <summary>보스의 현재 HP 비율(0~100)을 계산한다. MaxHp가 0 이하인 방어적 경우 0을 반환한다.</summary>
+    private double BossHpPercent()
+        => _boss.FinalStats.MaxHp <= 0 ? 0 : _boss.FinalStats.CurrentHp / _boss.FinalStats.MaxHp * 100.0;
+
+    private void Emit(RaidStepResult step, GameEventSink sink)
     {
         if (step.Event is RaidEventType.None or RaidEventType.BossDamaged)
         {
             return;
         }
 
-        logWriter.TryWrite(RaidEventLogger.Format(_boss, step));
+        if (step.Event == RaidEventType.BossDefeated)
+        {
+            sink.RecordRaidBossDefeated(step.Grants.Count);
+        }
+        else if (step.Event == RaidEventType.RaidFailed)
+        {
+            sink.RecordRaidFailed();
+        }
+
         foreach (var grant in step.Grants)
         {
             _rewardChannel.Writer.TryWrite(grant);

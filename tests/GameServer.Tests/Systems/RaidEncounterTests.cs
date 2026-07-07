@@ -138,12 +138,12 @@ public class RaidEncounterTests
     {
         var boss = MakeBoss(hp: 1_000_000, def: 0, expDrop: 1, goldDrop: 1);
         var raid = new RaidEncounter(boss, TimeSpan.FromSeconds(30));
-        var logChannel = Channel.CreateUnbounded<string>();
+        var sink = new GameEventSink(TextWriter.Null);
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
 
         raid.SubmitDamage("p1", 100); // 취소 전에 채널에 미리 넣어 ReadAllAsync가 최소 1회 순회하게 함
 
-        await raid.RunAsync(logChannel.Writer, cts.Token);
+        await raid.RunAsync(sink, cts.Token);
 
         // 취소 후 정상 반환된 것 자체가 핵심 검증(무한 대기에 갇히지 않음, 스레드도 점유하지 않음).
         // 제출한 데미지가 실제로 적용됐는지도 함께 확인.
