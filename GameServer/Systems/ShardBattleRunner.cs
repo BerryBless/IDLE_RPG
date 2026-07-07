@@ -15,6 +15,9 @@ namespace GameServer.Systems;
 /// 조회만 수행하는 <see cref="BattleLoop"/>이어야 하며, 같은 <see cref="Player"/>/<see cref="Monster"/>
 /// 인스턴스를 여러 스레드에서 동시에 대상으로 호출해서는 안 된다(<see cref="BattleLoop.Tick"/> 자체의
 /// 제약과 동일).</description></item>
+/// <item><description><b>Memory Allocation:</b> <see cref="TryTick"/> 자체는 새 힙 객체를 만들지 않는다.
+/// 정상 경로의 할당은 <see cref="BattleLoop.Tick"/>이 이미 수행하는 것이 전부이며, 예외 경로에서는
+/// <c>catch</c>로 잡은 기존 예외 객체를 그대로 반환할 뿐 새로 생성하지 않는다.</description></item>
 /// <item><description><b>Blocking 여부:</b> Non-blocking. <see cref="BattleLoop.Tick"/>과 동일하게 즉시
 /// 반환한다.</description></item>
 /// </list>

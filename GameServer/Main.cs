@@ -71,7 +71,7 @@ void RunShard(List<(Player Player, Monster Monster)> shard)
                 continue;
             }
 
-            if (result is not null && result.Value != BattleTickEvent.None)
+            if (result!.Value != BattleTickEvent.None)
             {
                 Console.WriteLine(BattleEventLogger.Format(player.InstanceId, result.Value, player));
             }

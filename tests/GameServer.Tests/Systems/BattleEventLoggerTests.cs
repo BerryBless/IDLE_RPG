@@ -1,5 +1,4 @@
 using GameServer.Entities;
-using GameServer.Stats;
 using GameServer.Systems;
 
 namespace GameServer.Tests.Systems;

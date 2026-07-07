@@ -86,6 +86,15 @@ flowchart TB
 - `PlayerLevelSystem.CheckLevelUp`: 내부 `LevelTable`(`MasterDataTable<TKey,T>`)은 생성 시 1회
   `Dictionary`를 구축한 뒤 조회만 하므로(불변) 동시 읽기 안전. 실제 변경 대상은 호출 인자로 받은
   `Player` 인스턴스뿐 — 그 플레이어를 소유한 스레드만 접근하므로 안전.
+- `RewardComponent.GenerateLoot`(`BattleLoop.Tick`이 몬스터 처치 시 `monster.Rewards.GenerateLoot(1)`로
+  호출)도 틱 경로 위의 동시 접근 지점이다. 내부 `System.Random` 필드는 스레드 안전하지 않지만,
+  `MonsterFactory.Create`가 몬스터 1마리당 `RewardComponent` 인스턴스를 매번 새로 할당하므로 각
+  샤드가 소유한 몬스터는 항상 자신만의 `RewardComponent`/`Random`을 갖고, 스레드 간에 공유되지
+  않아 안전하다. **이 안전성은 "몬스터 인스턴스별 `RewardComponent` 신규 할당"이라는 불변조건에
+  전적으로 의존한다** — 향후 몬스터 풀링을 도입하거나 템플릿이 `RewardComponent`를 공유 인스턴스로
+  들고 있는 구조로 바뀌면 이 불변조건이 깨져 샤드 간 레이스 컨디션이 조용히 재발할 수 있다. 이런
+  변경을 검토할 때는 `RewardComponent`가 몬스터 인스턴스별로 독립 할당되는 구조를 반드시 유지해야
+  한다.
 
 ## 5. 오류 처리 (핵심 위험)
 
