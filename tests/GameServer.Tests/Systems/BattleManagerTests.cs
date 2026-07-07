@@ -2,6 +2,7 @@ using GameServer.Entities;
 using GameServer.Items;
 using GameServer.Stats;
 using GameServer.Systems;
+using System.Reflection;
 
 namespace GameServer.Tests.Systems;
 
@@ -63,5 +64,19 @@ public class BattleManagerTests
         var damage = battleManagerWithoutCrit.CalcFinalDamage(player, target, attackScaling: 2.0f);
 
         Assert.Equal(300, damage, precision: 5);
+    }
+
+    [Fact]
+    public void Instance_DefaultConstructorPath_UsesRandomSharedForThreadSafety()
+    {
+        // 다중 플레이어 배틀 스레드 샤딩 사이클: BattleManager.Instance가 여러 샤드 스레드에서
+        // 동시 호출되므로, 기본 생성자 경로가 스레드 안전한 Random.Shared를 쓰는지 반사로
+        // 검증한다. Random.Shared는 프로세스 전역에서 항상 같은 인스턴스를 반환하므로
+        // 참조 동일성 비교가 결정적이다.
+        var field = typeof(BattleManager).GetField("_random", BindingFlags.NonPublic | BindingFlags.Instance);
+
+        var randomFieldValue = field!.GetValue(BattleManager.Instance);
+
+        Assert.Same(Random.Shared, randomFieldValue);
     }
 }

@@ -9,9 +9,12 @@ namespace GameServer.Systems;
 /// <remarks>
 /// <b>[성능 및 동시성 제약 조건]</b>
 /// <list type="bullet">
-/// <item><description><b>Thread Safety:</b> Not Thread-safe. 내부 <see cref="_random"/>(<see cref="Random"/>)은
-/// 스레드 안전하지 않으므로, 전투 갱신 루프(단일 스레드)에서만 호출하는 것을 전제로 한다.
-/// 여러 스레드에서 동시 호출해야 한다면 스레드별 인스턴스 또는 <c>Random.Shared</c>(.NET 6+, 스레드 안전) 도입이 필요하다.</description></item>
+/// <item><description><b>Thread Safety:</b> <see cref="Instance"/>(기본 생성자 경로)는 Thread-safe.
+/// 내부 <see cref="_random"/>이 <see cref="System.Random.Shared"/>(.NET 6+, 스레드 안전)를 사용하므로
+/// 여러 샤드 스레드가 동시에 <see cref="CalcFinalDamage"/>를 호출해도 안전하다(다중 플레이어 배틀
+/// 스레드 샤딩 사이클에서 수정). 단, <see cref="BattleManager(Random)"/>로 별도 <see cref="Random"/>을
+/// 주입하면(주로 테스트의 결정적 시드 목적) 그 인스턴스는 더 이상 스레드 안전을 보장하지 않으므로
+/// 단일 스레드에서만 사용해야 한다.</description></item>
 /// <item><description><b>Blocking 여부:</b> 순수 계산만 수행하며 항상 즉시 반환(non-blocking)된다.</description></item>
 /// </list>
 /// <b>[BigNumber 임시 결합 주의]</b>
@@ -38,7 +41,7 @@ public sealed class BattleManager
     // 생성자 주입을 허용해 테스트 시 결정적 시드로 크리티컬 판정을 재현할 수 있게 한다.
     private readonly Random _random;
 
-    private BattleManager() : this(new Random())
+    private BattleManager() : this(Random.Shared)
     {
     }
 
