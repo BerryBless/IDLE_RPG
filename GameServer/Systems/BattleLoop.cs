@@ -146,22 +146,26 @@ public sealed class BattleLoop
     }
 
     /// <summary>이번 틱의 결과를 콘솔에 출력한다(데모 목적 — 실제 로깅 인프라 연동은 후속 사이클 대상).</summary>
+    /// <remarks>
+    /// 코드리뷰(2026-07-07 종합 리뷰, 아키텍처 High) 수정: 처치/사망 이벤트 포맷은
+    /// <see cref="BattleEventLogger.Format"/> 하나로 통합한다. 이전에는 이 메서드가 같은
+    /// <see cref="BattleTickEvent"/>를 별도 switch로 다시 포맷했고 문자열도 서로 달라(예: "몬스터
+    /// 재등장" 접미사 유무), 새 이벤트 종류 추가 시 두 곳을 모두 고쳐야 하는 중복이 있었다. HP 상태
+    /// 줄(<see cref="BattleTickEvent.None"/>)은 <see cref="BattleEventLogger"/>가 다중 플레이어
+    /// 샤드 규모(콘솔 과다 출력 방지)를 위해 의도적으로 비워두는 부분이라, 단일 페어 데모인
+    /// <see cref="RunAsync"/>에서만 여기서 별도로 출력한다.
+    /// </remarks>
     private static void LogTick(BattleTickEvent result, Player player, Monster monster)
     {
-        switch (result)
+        var formatted = BattleEventLogger.Format(player.InstanceId, result, player);
+        if (!string.IsNullOrEmpty(formatted))
         {
-            case BattleTickEvent.MonsterDefeated:
-                Console.WriteLine(
-                    $"[처치] 몬스터 처치! Lv.{player.Level} 누적 Exp={player.CurrentExp}, Gold={player.CurrentGold} — 몬스터 재등장");
-                break;
-            case BattleTickEvent.PlayerDefeated:
-                Console.WriteLine("[부활] 플레이어 사망 → 즉시 부활");
-                break;
-            default:
-                Console.WriteLine(
-                    $"[전투] Player HP {player.FinalStats.CurrentHp:F1}/{player.FinalStats.MaxHp:F1} | " +
-                    $"Monster HP {monster.FinalStats.CurrentHp:F1}/{monster.FinalStats.MaxHp:F1}");
-                break;
+            Console.WriteLine(formatted);
+            return;
         }
+
+        Console.WriteLine(
+            $"[전투] Player HP {player.FinalStats.CurrentHp:F1}/{player.FinalStats.MaxHp:F1} | " +
+            $"Monster HP {monster.FinalStats.CurrentHp:F1}/{monster.FinalStats.MaxHp:F1}");
     }
 }
