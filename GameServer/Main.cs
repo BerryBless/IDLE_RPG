@@ -66,12 +66,6 @@ Console.CancelKeyPress += (_, e) =>
     cts.Cancel();
 };
 
-var shards = Enumerable.Range(0, ThreadCount)
-    .Select(shardIndex => Enumerable.Range(0, PlayersPerThread)
-        .Select(i => CreatePair(shardIndex * PlayersPerThread + i))
-        .ToList())
-    .ToList();
-
 // 레이드 보스: MonsterFactory.Create가 스폰 시 1회 UpdateFinalStats+RestoreResources를 마친
 // 상태로 반환한다. 이후에는 RaidEncounter의 절대 규칙에 따라 이 인스턴스에 Update/UpdateFinalStats를
 // 다시는 호출하지 않는다 — 샤드 스레드가 동시에 읽는 Def/CombatTraits를 재기록하면 값이 같아도
@@ -100,9 +94,13 @@ for (int shardIndex = 0; shardIndex < ThreadCount; shardIndex++)
         // shard: for 루프 변수 shardIndex를 그대로 클로저에서 캡처하면 안 된다 — foreach와 달리
         // for 루프 변수는 반복마다 새로 스코프되지 않고 전체 루프에서 단일 변수를 공유하므로,
         // 스레드가 실제로 시작되는 시점(비동기)에는 루프가 이미 끝나 shardIndex==ThreadCount가
-        // 되어 shards[shardIndex]가 범위를 벗어난다(실측: ArgumentOutOfRangeException). 이 로컬
-        // 변수는 반복마다 새로 선언되므로 클로저가 이 값을 안전하게 캡처한다.
-        var shard = shards[shardIndex];
+        // 되어버린 값을 참조하게 된다(실측: ArgumentOutOfRangeException). 이 로컬 변수는 반복마다
+        // 새로 계산·선언되므로 클로저가 이번 반복의 값을 안전하게 캡처한다. 레이드 샤드
+        // (RaidShardIndex)는 개인 몬스터가 필요 없으므로 이 목록에서 처음부터 제외한다(만들어놓고
+        // 버리는 낭비 방지).
+        var shard = Enumerable.Range(0, PlayersPerThread)
+            .Select(i => CreatePair(shardIndex * PlayersPerThread + i))
+            .ToList();
         // Thread: 전용 스레드로 샤드를 격리한다. 샤드 루프는 WaitHandle.WaitOne으로 동기 대기하지만,
         // 스레드 풀 작업 항목이 아니라 전용 스레드라 대기 중에도 다른 작업을 막지 않는다.
         // IsBackground=true는 정상 취소 경로를 놓치는 비정상 상황에서도 프로세스가 매달리지 않게
