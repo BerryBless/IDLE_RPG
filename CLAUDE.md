@@ -159,6 +159,7 @@ private readonly SemaphoreSlim _sendGate = new SemaphoreSlim(1, 1);
 | 날짜 | 변경 내용 | 대상 | 사유 |
 |------|----------|------|------|
 | 2026-07-03 | 초기 구성 | 전체 | ClaudeCodeStudy 하네스 이식 |
+| 2026-07-07 | 결과 보고서를 `docs/code-reviews/`에 영구 보존(수동 실행 시) | docs/code-reviews/2026-07-07-multi-player-battle-sharding-review.md | `_workspace/`가 gitignore 대상이라 2026-07-06 실행 결과(`03_consolidated_report.md`)가 커밋되지 않아 유실됨 — 이번 실행 결과를 `docs/code-reviews/YYYY-MM-DD-<주제>-review.md`로 복사·커밋해 재발 방지 (스킬 자체의 표준 Phase 5 갱신은 범위 밖으로 보류) |
 
 ---
 
