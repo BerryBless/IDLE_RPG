@@ -3,7 +3,7 @@ using GameServer.Stats;
 namespace GameServer.Systems;
 
 /// <summary>
-/// 몬스터 마스터 데이터 테이블. 현재는 10종을 C#으로 하드코딩해 보관한다.
+/// 몬스터 마스터 데이터 테이블. 현재는 11종을 C#으로 하드코딩해 보관한다.
 /// </summary>
 /// <remarks>
 /// <b>[JSON 이관 대비]</b> 하드코딩 데이터는 <see cref="CreateDefault"/> 정적 팩토리 메서드
@@ -15,7 +15,7 @@ namespace GameServer.Systems;
 /// <b>[ID 대역]</b> <see cref="MonsterTemplate.MonsterId"/>는 2000번대를 사용한다. 드롭 아이템
 /// (<see cref="DropPool.ItemMetaId"/>)은 3000번대로, 장비(<c>GameServer.Items.EquipmentTemplate</c>)의
 /// 4000~6000번대와 겹치지 않게 채번한다(코드리뷰 2026-07-06 Low 수정 — 이전에는 이 대역 규칙이
-/// 문서화되지 않고 암묵적으로만 지켜지고 있었다).
+/// 문서화되지 않고 암묵적으로만 지켜지고 있었다). 7000번대는 공유 레이드 보스 전용이다(2026-07-07 추가).
 /// <b>[조회 로직]</b> 코드리뷰 2026-07-06 Medium 수정: 조회는 이제
 /// <see cref="MasterDataTable{TKey,T}"/> 공통 기반의 Dictionary 인덱스를 사용한다(과거 foreach
 /// 선형 탐색이 3개 테이블에 중복돼 있던 것을 제거).
@@ -101,6 +101,13 @@ public sealed class MonsterTable : MasterDataTable<int, MonsterTemplate>
             DropTable = [new DropPool { ItemMetaId = 3010, DropChance = 0.1f, MinQty = 1, MaxQty = 1 }],
             // 흡혈 어픽스 — 언데드 마법사가 피해량의 일부를 자기 체력으로 흡수한다는 컨셉.
             Affixes = [new StatModifier { StatType = StatType.Lifesteal, ModType = ModifierType.FlatAdd, Value = 0.1 }]
+        },
+        new()
+        {
+            MonsterId = 7001, Name = "레이드 보스", Level = 20,
+            Hp = 5_000_000, Atk = 0, Def = 50,   // Atk=0: 반격 없음(레이드 스펙 확정). Def는 인코운터 내내 불변
+            ExpDrop = 100_000, GoldDrop = 200_000,
+            DropTable = []                        // 아이템 드롭 없음 — Exp/Gold만 기여 비례로 결정적 분배
         }
     };
 

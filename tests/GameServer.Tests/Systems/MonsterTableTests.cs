@@ -5,11 +5,11 @@ namespace GameServer.Tests.Systems;
 public class MonsterTableTests
 {
     [Fact]
-    public void All_ContainsExactlyTenMonsters()
+    public void All_ContainsExactlyElevenMonsters()
     {
         var table = MonsterTable.CreateDefault();
 
-        Assert.Equal(10, table.All.Count);
+        Assert.Equal(11, table.All.Count);
     }
 
     [Fact]
@@ -52,7 +52,7 @@ public class MonsterTableTests
 
         Assert.Single(custom.All);
         Assert.Equal(9001, custom.GetById(9001).MonsterId);
-        Assert.Equal(10, defaultTable.All.Count); // 커스텀 인스턴스가 기본 데이터에 영향 없음
+        Assert.Equal(11, defaultTable.All.Count); // 커스텀 인스턴스가 기본 데이터에 영향 없음
         Assert.Throws<KeyNotFoundException>(() => defaultTable.GetById(9001));
     }
 
@@ -66,5 +66,15 @@ public class MonsterTableTests
             new() { MonsterId = 1, Name = "A", Level = 1, Hp = 1, Atk = 1, Def = 0 },
             new() { MonsterId = 1, Name = "B", Level = 1, Hp = 1, Atk = 1, Def = 0 }
         }));
+    }
+
+    [Fact]
+    public void GetById_RaidBossId_ReturnsMatchingTemplate()
+    {
+        var table = MonsterTable.CreateDefault();
+        var template = table.GetById(7001);
+
+        Assert.Equal(7001, template.MonsterId);
+        Assert.Equal(0, template.Atk); // 레이드 보스는 반격하지 않는다(스펙 확정 사항)
     }
 }
