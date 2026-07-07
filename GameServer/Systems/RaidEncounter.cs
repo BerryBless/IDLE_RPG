@@ -24,7 +24,7 @@ public enum RaidEventType
 /// <b>Thread Safety:</b> 불변(readonly record struct)이라 스레드 간 값 복사로 전달되어 안전.
 /// <b>Memory Allocation:</b> 값 타입이라 힙 할당 없음(Channel 내부 버퍼에 값으로 저장).
 /// </remarks>
-public readonly record struct RaidAttackRequest(string PlayerInstanceId, BigNumber Damage);
+internal readonly record struct RaidAttackRequest(string PlayerInstanceId, BigNumber Damage);
 
 /// <summary>보스 처치 시 기여 비례로 계산된 보상을, 그 플레이어를 소유한 샤드 스레드로 되돌려 보내는 메시지.</summary>
 /// <remarks>
@@ -111,8 +111,10 @@ public sealed class RaidEncounter
     /// <param name="playerInstanceId">피해를 입힌 플레이어의 InstanceId(기여도 추적용)</param>
     /// <param name="damage">계산된 피해량</param>
     /// <remarks>
-    /// <b>Thread Safety:</b> 여러 스레드에서 호출될 수 있다(현재 스코프는 단일 샤드라 사실상 단일
-    /// 생산자). <b>Blocking 여부:</b> Non-blocking — 무경계 채널의 TryWrite는 항상 즉시 성공한다.
+    /// <b>Thread Safety:</b> 현재 스코프에서는 단일 샤드(단일 생산자)만 호출한다 — 생성자에서
+    /// <c>_damageChannel</c>을 <c>SingleWriter=true</c>로 구성했으므로, 여러 샤드가 동시에 이
+    /// 메서드를 호출하는 다중 생산자로 확장하려면 그 설정도 함께 <c>SingleWriter=false</c>로
+    /// 바꿔야 한다. <b>Blocking 여부:</b> Non-blocking — 무경계 채널의 TryWrite는 항상 즉시 성공한다.
     /// </remarks>
     public void SubmitDamage(string playerInstanceId, BigNumber damage)
         => _damageChannel.Writer.TryWrite(new RaidAttackRequest(playerInstanceId, damage));
@@ -132,8 +134,11 @@ public sealed class RaidEncounter
     internal RaidStepResult ApplyDamage(RaidAttackRequest request)
     {
         _boss.TakeDamage(request.Damage);
+        // 기여도는 실제 HP 차감분과 일관되게 음수를 0으로 클램프한다 — TakeDamage 내부에서도
+        // 동일하게 클램프하지만(Entity.cs), 여기서 별도로 기록하는 값이라 방어적으로 한 번 더 막는다.
+        var clampedDamage = Math.Max(0, request.Damage);
         _contributions[request.PlayerInstanceId] =
-            _contributions.GetValueOrDefault(request.PlayerInstanceId) + request.Damage;
+            _contributions.GetValueOrDefault(request.PlayerInstanceId) + clampedDamage;
 
         if (_boss.IsAlive)
         {
