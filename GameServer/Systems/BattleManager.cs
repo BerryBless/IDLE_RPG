@@ -37,8 +37,10 @@ public sealed class BattleManager
     /// <summary>전역 유일 인스턴스.</summary>
     public static BattleManager Instance => _instance;
 
-    // System.Random: 내부적으로 상태(seed)를 갖는 의사난수 생성기라 스레드 안전하지 않음.
-    // 생성자 주입을 허용해 테스트 시 결정적 시드로 크리티컬 판정을 재현할 수 있게 한다.
+    // System.Random: 기본 생성자 경로에서는 Random.Shared(.NET 6+, 스레드별 내부 인스턴스를 사용해
+    // 스레드 안전)를 주입받으므로 여러 샤드 스레드가 동시에 호출해도 안전하다.
+    // 생성자 주입을 허용해 테스트 시 결정적 시드(new Random(seed) 등)로 크리티컬 판정을 재현할 수
+    // 있게 하지만, 이 경우 주입한 인스턴스는 스레드 안전을 보장하지 않으므로 단일 스레드에서만 써야 한다.
     private readonly Random _random;
 
     private BattleManager() : this(Random.Shared)
