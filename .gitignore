@@ -9,3 +9,4 @@ riderModule.iml
 _work*/
 tests/results/*
 !tests/results/SUMMARY.md
+logs/

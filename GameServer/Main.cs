@@ -5,7 +5,6 @@ global using BigNumber = double;
 using GameServer.Entities;
 using GameServer.Items;
 using GameServer.Systems;
-using System.Threading.Channels;
 
 // 도메인 타입 구성 예시. 다중 플레이어 배틀 스레드 샤딩 사이클(설계: docs/superpowers/specs/
 // 2026-07-07-multi-player-battle-sharding-design.md)부터는 "서버에 다수의 플레이어가 동시 접속해
@@ -13,15 +12,12 @@ using System.Threading.Channels;
 // ThreadCount * PlayersPerThread명의 Player/Monster 쌍을 하드코딩으로 생성해 스레드당
 // PlayersPerThread명씩 나눠 맡긴다. 플레이어 간 상호작용(파티/PvP)은 없다 — 완전히 독립된 전투.
 //
-// 2026-07-07 종합 코드 리뷰(docs/code-reviews/2026-07-07-multi-player-battle-sharding-review.md)
-// High 2건 수정: (1) CancellationToken을 되살려 Ctrl+C 시 각 샤드가 스스로 종료하도록 복원,
-// (2) 샤드 스레드들이 Console.WriteLine을 직접 호출해 전역 락에서 직렬화되던 문제를 Channel<T>
-// 기반 단일 로그 소비 스레드로 우회.
+// 2026-07-07 공유 레이드 보스 사이클(docs/superpowers/plans/2026-07-07-raid-boss.md): RaidShardIndex
+// 샤드의 플레이어들은 개인 몬스터 대신 하나의 공유 보스를 함께 공격한다.
 //
-// 2026-07-07 공유 레이드 보스 사이클(docs/superpowers/plans/2026-07-07-raid-boss.md): 파티 co-op가
-// 처음으로 도입됐다. RaidShardIndex 샤드의 플레이어들은 개인 몬스터 대신 하나의 공유 보스를 함께
-// 공격한다 — 보스 HP는 RaidEncounter의 단일 액터 루프만 변경하고, 샤드 스레드는 보스의 불변
-// 스탯(Def/CombatTraits)만 읽어 데미지 숫자를 계산해 Channel로 보낸다(RaidEncounter.cs 참고).
+// 2026-07-07 관측성 전환(docs/superpowers/plans/2026-07-07-observability.md): 콘솔 출력을 완전히
+// 제거하고 GameEventSink(System.Diagnostics.Metrics 카운터/게이지 + NDJSON 파일 로그)로 대체했다.
+// dotnet-counters monitor -p <pid> --counters IdleRpg.GameServer 로 실시간 관측 가능.
 
 const int ThreadCount = 4;        // 조정 가능 — 총 플레이어 수 = ThreadCount * PlayersPerThread
 const int PlayersPerThread = 100; // 고정(설계 문서 결정, 스레드당 100명)
@@ -37,23 +33,9 @@ var levelSystem = PlayerLevelSystem.CreateDefault();
 // 스레드가 동시에 Tick을 호출해도 안전 — Player/Monster 인스턴스만 샤드마다 독립이면 된다.
 var battleLoop = new BattleLoop(levelSystem);
 
-// Channel<string>: lock-free MPSC 큐로 구현되어 있어 다수 샤드 스레드(생산자) → 단일 로그 소비
-// 스레드(소비자) 경로에서 Console.Out의 전역 락 경합 없이 로그 문자열을 전달한다(코드리뷰
-// 2026-07-07 성능 High 수정 — 이전에는 모든 샤드 스레드가 직접 Console.WriteLine을 호출해
-// 프로세스 전역 락에서 직렬화되어 샤딩의 병렬성 이점이 상쇄됐다). 레이드 액터도 이 채널을 공유한다.
-var logChannel = Channel.CreateUnbounded<string>(new UnboundedChannelOptions
-{
-    SingleReader = true,
-    SingleWriter = false
-});
-
-var logConsumerTask = Task.Run(async () =>
-{
-    await foreach (var line in logChannel.Reader.ReadAllAsync())
-    {
-        Console.WriteLine(line);
-    }
-});
+// GameEventSink: 다수 샤드/레이드 액터(생산자)가 Record*로 메트릭+NDJSON 라인을 밀어넣고, 내부
+// 단일 소비자 태스크가 파일에 flush한다(기존 logChannel+logConsumerTask를 재사용 클래스로 승격).
+await using var sink = GameEventSink.CreateFile(Path.Combine("logs", "game-events.ndjson"));
 
 // CancellationTokenSource: Ctrl+C(SIGINT) 기본 동작인 즉시 프로세스 종료 대신, 각 샤드 전용
 // 스레드가 다음 대기 지점(WaitHandle.WaitOne)에서 스스로 루프를 빠져나가는 협조적 취소 신호로
@@ -73,9 +55,9 @@ Console.CancelKeyPress += (_, e) =>
 var raidBoss = MonsterFactory.Create(monsterTable.GetById(7001));
 var raid = new RaidEncounter(raidBoss, raidTimeLimit);
 
-// Task.Run: logConsumerTask와 동일한 관용구로 레이드 액터를 띄운다. RunAsync는 await 지점에서만
+// Task.Run: 레이드 액터를 전용 백그라운드 태스크로 띄운다. RunAsync는 await 지점에서만
 // 대기하므로 스레드 풀 스레드를 점유하지 않는다.
-var raidActorTask = Task.Run(() => raid.RunAsync(logChannel.Writer, cts.Token));
+var raidActorTask = Task.Run(() => raid.RunAsync(sink, cts.Token));
 
 for (int shardIndex = 0; shardIndex < ThreadCount; shardIndex++)
 {
@@ -93,11 +75,10 @@ for (int shardIndex = 0; shardIndex < ThreadCount; shardIndex++)
     {
         // shard: for 루프 변수 shardIndex를 그대로 클로저에서 캡처하면 안 된다 — foreach와 달리
         // for 루프 변수는 반복마다 새로 스코프되지 않고 전체 루프에서 단일 변수를 공유하므로,
-        // 스레드가 실제로 시작되는 시점(비동기)에는 루프가 이미 끝나 shardIndex==ThreadCount가
-        // 되어버린 값을 참조하게 된다(실측: ArgumentOutOfRangeException). 이 로컬 변수는 반복마다
-        // 새로 계산·선언되므로 클로저가 이번 반복의 값을 안전하게 캡처한다. 레이드 샤드
-        // (RaidShardIndex)는 개인 몬스터가 필요 없으므로 이 목록에서 처음부터 제외한다(만들어놓고
-        // 버리는 낭비 방지).
+        // 스레드가 실제로 시작되는 시점(비동기)에는 루프가 이미 끝나버린 값을 참조하게 된다(실측:
+        // ArgumentOutOfRangeException). 이 로컬 변수는 반복마다 새로 계산·선언되므로 클로저가
+        // 이번 반복의 값을 안전하게 캡처한다. 레이드 샤드(RaidShardIndex)는 개인 몬스터가 필요
+        // 없으므로 이 목록에서 처음부터 제외한다(만들어놓고 버리는 낭비 방지).
         var shard = Enumerable.Range(0, PlayersPerThread)
             .Select(i => CreatePair(shardIndex * PlayersPerThread + i))
             .ToList();
@@ -116,14 +97,13 @@ try
 }
 catch (OperationCanceledException)
 {
-    // Ctrl+C로 정상 종료 진입 — 아래에서 로그 채널을 닫고 남은 로그를 flush한다.
+    // Ctrl+C로 정상 종료 진입 — 아래에서 싱크를 닫고 남은 메트릭/로그를 flush한다.
 }
 
-// 레이드 액터를 먼저 기다린다: 액터가 logChannel에 마지막 처치/실패 로그를 쓸 수 있으므로,
-// logChannel을 닫기(TryComplete) 전에 액터가 끝나야 그 로그가 유실되지 않는다.
+// 레이드 액터를 먼저 기다린다: 액터가 sink에 마지막 처치/실패 라인을 쓸 수 있으므로,
+// sink를 닫기 전에 액터가 끝나야 그 로그가 유실되지 않는다.
 await raidActorTask;
-logChannel.Writer.TryComplete();
-await logConsumerTask;
+// await using으로 선언했으므로 sink.DisposeAsync()는 스코프 종료 시 자동 호출된다.
 
 (Player Player, Monster Monster) CreatePair(int index)
 {
@@ -163,13 +143,18 @@ void RunShard(List<(Player Player, Monster Monster)> shard, CancellationToken ca
             {
                 // 쌍 단위 격리: 이 예외를 여기서 삼키지 않으면 전용 스레드의 미처리 예외가
                 // 프로세스 전체를 종료시킨다(백그라운드 스레드 여부 무관).
-                logChannel.Writer.TryWrite($"[{player.InstanceId}] Tick 예외: {exception.Message}");
+                sink.RecordTickException(player.InstanceId, exception);
                 continue;
             }
 
-            if (result!.Value != BattleTickEvent.None)
+            switch (result!.Value)
             {
-                logChannel.Writer.TryWrite(BattleEventLogger.Format(player.InstanceId, result.Value, player));
+                case BattleTickEvent.MonsterDefeated:
+                    sink.RecordMonsterDefeated(player.InstanceId, player.Level, player.CurrentExp, player.CurrentGold);
+                    break;
+                case BattleTickEvent.PlayerDefeated:
+                    sink.RecordPlayerDefeated(player.InstanceId);
+                    break;
             }
         }
 
@@ -209,7 +194,7 @@ void RunRaidShard(List<Player> players, Monster sharedBoss, RaidEncounter encoun
             }
             catch (Exception ex)
             {
-                logChannel.Writer.TryWrite($"[{player.InstanceId}] 레이드 Tick 예외: {ex.Message}");
+                sink.RecordTickException(player.InstanceId, ex);
             }
         }
 
