@@ -62,12 +62,16 @@ public class GameEventSinkTests
     public void RecordMonsterDefeated_IncrementsMetricAndWritesLine()
     {
         // 병렬 실행 중인 다른 테스트와 Meter 이름이 겹치지 않도록 고유 이름을 쓴다(GameMetricsTests와 동일 이유).
-        var metrics = new GameMetrics($"Test.GameEventSink.{Guid.NewGuid()}");
+        var meterName = $"Test.GameEventSink.{Guid.NewGuid()}";
+        var metrics = new GameMetrics(meterName);
         long sum = 0;
         using var listener = new System.Diagnostics.Metrics.MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
-            if (instrument.Name == "game.monster.defeated")
+            // instrument.Name만 보면 다른 테스트 클래스가 병렬로 만든 동명 계측기(game.monster.defeated)의
+            // 측정값까지 주워버려 간헐적으로 sum이 1을 초과한다 — Meter.Name까지 함께 걸러야 이 테스트가
+            // 만든 GameMetrics 인스턴스만 관측한다(GameMetricsTests와 동일 패턴).
+            if (instrument.Name == "game.monster.defeated" && instrument.Meter.Name == meterName)
             {
                 l.EnableMeasurementEvents(instrument);
             }

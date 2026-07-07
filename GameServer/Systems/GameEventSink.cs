@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Channels;
@@ -88,7 +89,10 @@ public sealed class GameEventSink : IAsyncDisposable
         }
     }
 
-    private static string Ts(DateTime utc) => utc.ToString("yyyy-MM-ddTHH:mm:ss'Z'");
+    // CultureInfo.InvariantCulture: 커스텀 포맷 문자열은 현재 스레드 문화권의 달력을 따르므로,
+    // 지정하지 않으면 비그레고리력 문화권(예: th-TH의 불기)에서 연도가 어긋나 machine-readable
+    // NDJSON ts 필드가 깨진다.
+    private static string Ts(DateTime utc) => utc.ToString("yyyy-MM-ddTHH:mm:ss'Z'", CultureInfo.InvariantCulture);
 
     /// <summary>몬스터 처치 이벤트를 NDJSON 한 줄로 포맷한다(순수 함수, 테스트 대상).</summary>
     internal static string MonsterDefeatedLine(DateTime ts, string playerId, int level, double exp, double gold)
