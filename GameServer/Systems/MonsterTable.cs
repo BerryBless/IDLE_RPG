@@ -31,7 +31,7 @@ public sealed class MonsterTable : MasterDataTable<int, MonsterTemplate>
     {
     }
 
-    /// <summary>하드코딩된 기본 10종 데이터로 테이블을 생성한다.</summary>
+    /// <summary>하드코딩된 기본 11종 데이터로 테이블을 생성한다.</summary>
     public static MonsterTable CreateDefault() => new(BuildDefaultTemplates());
 
     private static List<MonsterTemplate> BuildDefaultTemplates() => new()
