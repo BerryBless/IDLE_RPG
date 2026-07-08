@@ -78,10 +78,10 @@ plan/<기능명>_<MMDD>.md
 | 문서 | 요약 |
 |------|------|
 | [gameserver_domain_scaffold_0704.md](plan/gameserver_domain_scaffold_0704.md) | mermaid classDiagram 기반 GameServer 도메인 모델(스탯·전투·아이템·엔티티·보상) 스켈레톤 스캐폴딩. §8에 2026-07-05 기준 구현 상태 classDiagram·원본 대비 델타표 추가 |
-| [battle_system_0705.md](plan/battle_system_0705.md) | 방치형 전투 플로우 설계(온라인 실시간 틱 + 오프라인 수식 하이브리드) 및 TDD 구현: 스탯 집계 파이프라인·버프·보상·오프라인 정산·코드리뷰 수정(F1~F11)·단일 Player vs Monster `BattleLoop` 무한 루프 완료(`GameServer.Tests` 63개), Stage/Wave/Spawner/스킬/부활코스트는 다음 사이클 |
+| [battle_system_0705.md](plan/battle_system_0705.md) | 방치형 전투 플로우 설계(온라인 실시간 틱 + 오프라인 수식 하이브리드) 및 TDD 구현: 스탯 집계 파이프라인·버프·보상·오프라인 정산·코드리뷰 수정(F1~F11)·단일 Player vs Monster `BattleLoop` 무한 루프 완료(`GameServer.Tests` 63개), Stage/Wave/Spawner/스킬/부활코스트는 다음 사이클. §9에 2026-07-08 기준 구현 상태 갱신(드리프트 정정) 추가 |
 | [serverlib_echo_import_0708.md](plan/serverlib_echo_import_0708.md) | ClaudeCodeStudy `ServerLib`(고성능 소켓 서버 라이브러리) 소스 반입 설계. `ServerLib`는 루트 직속(GameServer와 동급), `EchoServer`/`EchoClient`는 `examples/`, 자동 테스트는 `tests/EchoExample.Tests`. 에코 왕복 스모크 테스트로 1차 검증, GameServer 통합은 다음 사이클 |
 | [client_server_split_0708.md](plan/client_server_split_0708.md) | 클라-서버 분리 1단계: GameServer의 400명 스레드 샤딩 데모를 제거하고 `ServerNet` 기반 실제 TCP 서버(포트 7777)로 교체. 로그인 생략, 소켓 연결마다 `SessionPlayerBinder`가 임시 `Player`를 생성해 `session.Context`에 부착. 실소켓 통합 테스트로 연결→해제 사이클 검증, 게임플레이 프로토콜(OnReceived)과 실제 로그인은 다음 사이클 |
-| [battle_multiplayer_0708.md](plan/battle_multiplayer_0708.md) | 전투 멀티플레이 1단계: 접속한 각 세션이 서버 자동 틱(500ms)으로 독립 몬스터를 동시에 사냥, `MobHpPacket`/`MobDeathPacket`을 그 세션에만 푸시(`SessionBattleRunner` 신규, `BattleLoop.RunAsync`에 선택적 `onTick` 콜백 추가). 동시 2연결 세션별 격리 테스트 + 실소켓 스모크로 검증. 공유 보스 co-op·PvP·실로그인은 다음 사이클 |
+| [battle_multiplayer_0708.md](plan/battle_multiplayer_0708.md) | 전투 멀티플레이 1단계: 접속한 각 세션이 서버 자동 틱(500ms)으로 독립 몬스터를 동시에 사냥, `MobHpPacket`/`MobDeathPacket`을 그 세션에만 푸시(`SessionBattleRunner` 신규, `BattleLoop.RunAsync`에 선택적 `onTick` 콜백 추가). 동시 2연결 세션별 격리 테스트 + 실소켓 스모크로 검증. 공유 보스 co-op·PvP·실로그인은 다음 사이클. 문서 끝에 2026-07-08 기준 구현 상태 갱신(Main.cs 배선이 이후 SessionRaidRunner로 대체됨) 추가 |
 | [battle_raid_coop_0708.md](plan/battle_raid_coop_0708.md) | 전투 멀티플레이 2단계: 접속한 모든 플레이어가 공유 레이드 보스(몬스터 7001)를 동시 공격, `RaidEncounter` 액터 루프 하나가 보스 HP를 전담하고 `ISessionRegistry.BroadcastAsync`로 전원에게 `MobHpPacket`/`MobDeathPacket`을 동일하게 푸시(`SessionRaidRunner`/`RaidBroadcastPackets` 신규, `RaidEncounter`에 다중 라이터 지원 + `onStep` 콜백 추가). 세션별 독립 몬스터(`SessionBattleRunner`)는 이 경로에서 대체(git 이력 보존). 다중 라이터 동시성 테스트 + 실소켓 2연결(byte-identical 브로드캐스트 확인) 스모크로 검증. PvP·실로그인·보스 페이즈는 다음 사이클 |
 
 ---

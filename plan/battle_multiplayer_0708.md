@@ -149,3 +149,20 @@ Generation 1에서 HP 38→22→6으로 감소 → `MobDeathPacket`(id=7, `TopDa
 - PvP.
 - 실제 로그인(현재도 `AccountId=0` 임시값 유지).
 - 스테이지/스포너 시스템 도입 시 고정 몬스터(2003)/고정 장비(4001/5001/6001) 하드코딩을 대체.
+
+## 향후 확장 포인트 이후 갱신 (2026-07-08 기준 — 전투 멀티플레이 2단계 완료 후)
+
+위 "향후 확장 포인트"가 예측한 공유 보스 co-op는 실제로 같은 날 다음 사이클
+(`plan/battle_raid_coop_0708.md`)에서 거의 그대로 구현됐다(`RaidEncounter`의
+`SingleWriter=false` 전환, `ISessionRegistry.BroadcastAsync` 사용 모두 예측대로). 그 사이클이
+`Main.cs`의 배선을 다시 바꾸면서, 이 문서의 §3/§4/§5가 서술한 "Main.cs" 관련 내용과 클래스
+개수 서술이 낡았다 — 원본은 그대로 두고 아래로 정정한다.
+
+| 원본 주장 | 현재 상태 | 근거 |
+|---|---|---|
+| §3/§4/§5: `Main.cs`가 `binder`→`battleRunner` 순서로 `SessionBattleRunner`를 배선 | `Main.cs`는 이제 `SessionRaidRunner`를 배선한다(`binder`→`raidRunner`). `SessionBattleRunner` 자체·테스트는 그대로 존재·컴파일·통과하지만 서버 진입점에서는 더 이상 실행되지 않는다 | `GameServer/Main.cs:16-18(주석으로 자체 기록),50,66,78,82` |
+| §2: "`SessionPlayerBinder`와 나란히 `ISession`을 다루는 두 번째(이자 마지막) 클래스" | `battle_raid_coop_0708` 사이클에서 세 번째 클래스 `SessionRaidRunner`가 추가되어 더 이상 "마지막"이 아님 | `GameServer/Systems/SessionRaidRunner.cs` |
+
+`SessionBattleRunner.cs`/`SessionBattlePackets.cs`와 그 테스트 자체의 클래스 구조·API·동작
+서술(§2~§6)은 여전히 코드와 정확히 일치한다 — 낡은 것은 오직 "이 서버 경로에서 지금 실행되는
+것이 무엇인가"에 대한 서술뿐이다(2026-07-08 감사).

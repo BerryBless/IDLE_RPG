@@ -537,3 +537,22 @@ dotnet run --project GameServer/GameServer.csproj
 - 아이템 마스터 데이터 조회 시스템(`LootItem`을 실제 `Weapon`/`Armor`/`Accessory`로 구체화)
 - 멀티플레이 접점 (본 설계는 싱글 플레이 범위로 한정)
 - 액티브 플레이 보상(수동 개입 시 추가 보상) 도입 여부 — 완전 자동 채택으로 이번 사이클엔 배제
+
+## 9. 구현 상태 갱신 (2026-07-08 기준)
+
+이후 세 사이클(`plan/battle_multiplayer_0708.md`, `plan/battle_raid_coop_0708.md`, 그리고
+2026-07-07 관측성 전환)이 이 문서가 다루는 코드를 다시 바꾸면서, 위 §5/§8의 일부 서술이 지금의
+코드와 어긋나게 됐다. 원본 서술은 그 시점의 설계 결정 기록으로 그대로 두고, 아래 표로 현재 상태를
+바로잡는다(`gameserver_domain_scaffold_0704.md` §8과 동일한 관례).
+
+| 원본(§) 주장 | 현재 상태 | 근거 |
+|---|---|---|
+| §5: `BattleLoop.Run(player, monster, tickInterval, cancellationToken)` | `RunAsync`로 이름이 바뀌었고, `sink`(2026-07-07 관측성 전환)·`onTick`(`battle_multiplayer_0708`) 두 선택 인자가 추가됨. 문서엔 둘 다 언급 없음 | `GameServer/Systems/BattleLoop.cs:141-143` |
+| §5: `Tick` 본문 인용 코드(처치→보상 지급→`RestoreResources`) | 실제로는 `AddGold` 직후 `_levelSystem.CheckLevelUp(player);` 호출이 있음(§6 H1에 텍스트로는 언급됐으나 §5 코드 블록은 갱신 안 됨) | `BattleLoop.cs:91-94` |
+| §8: `LogTick`의 `Console.WriteLine`을 "멀티배틀 전까지 의도적으로 유지" | 2026-07-07 관측성 전환으로 콘솔 출력이 완전히 제거되고 `GameEventSink`(NDJSON+메트릭)로 대체됨 | `BattleLoop.cs:165-187` |
+| §5: `OfflineProgressionManager`가 "구현 완료" | 클래스 전체가 `/* */`로 주석 처리되어 컴파일 대상에서 제외됨(§6에 2026-07-06 주석 처리가 언급됐으나 §5 프레이밍은 갱신 안 됨) — 온라인 틱+오프라인 수식 하이브리드의 오프라인 절반이 현재 비활성 | `OfflineProgressionManager.cs:7,64` |
+| §8: "멀티플레이 접점(본 설계는 싱글 플레이 범위로 한정)" | 이후 두 사이클이 정확히 이 범위를 깨고 세션별 독립 몬스터(`SessionBattleRunner`)와 공유 보스 co-op(`RaidEncounter`/`SessionRaidRunner`)를 구현함 | `plan/battle_multiplayer_0708.md`, `plan/battle_raid_coop_0708.md` |
+
+그 외(Entity/Player/Monster/RewardComponent/PlayerLevelSystem/Stats 필드·메서드 단위 주장,
+F1~F11/H1 코드리뷰 수정 내역, Stage/Wave/MonsterSpawner/스킬 등 "다음 사이클 미룸" 항목들)는 전부
+현재 코드와 일치함을 확인했다(2026-07-08 감사).
