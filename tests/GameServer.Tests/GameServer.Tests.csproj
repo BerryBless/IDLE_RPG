@@ -20,6 +20,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\GameServer\GameServer.csproj" />
+    <!-- ServerLib: SessionConnectionEndToEndTests가 ServerNet.CreateClient()/ISession을 직접
+         사용해 실제 루프백 소켓으로 SessionPlayerBinder 배선을 검증하므로 직접 참조한다
+         (EchoExample.Tests와 동일하게, GameServer를 통한 전이 참조에 의존하지 않고 명시). -->
+    <ProjectReference Include="..\..\ServerLib\ServerLib.csproj" />
   </ItemGroup>
 
 </Project>
