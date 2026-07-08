@@ -13,12 +13,18 @@ using ServerLib.Interface;
 // 등 도메인 클래스 자체는 그대로 유지되며 각자의 단위 테스트가 계속 커버한다). 그 사이클에서는
 // 실제 TCP 클라이언트가 접속할 수 있는 네트워크 서버로 전환했다.
 //
-// 전투 멀티플레이 1단계(이번 사이클): 접속한 각 클라이언트가 자신만의 독립적인 몬스터를
-// 서버 자동 틱(방치형 스타일)으로 동시에 사냥한다 — 클라이언트는 명령을 보내지 않고
-// MobHpPacket/MobDeathPacket 결과만 수신한다. 로그인은 여전히 없다(SessionPlayerBinder가 소켓
-// 연결마다 임시 Player를 생성). 공유 보스 co-op·PvP·실제 로그인은 이후 사이클 과제다.
+// 전투 멀티플레이 1단계: 접속한 각 클라이언트가 자신만의 독립적인 몬스터를 서버 자동 틱으로
+// 동시에 사냥하도록 만들었다(SessionBattleRunner) — 그 클래스와 테스트는 git 이력에 보존되며
+// 이 서버 경로에서는 더 이상 배선하지 않는다.
+//
+// 전투 멀티플레이 2단계(이번 사이클): 접속한 모든 클라이언트가 하나의 공유 레이드 보스(몬스터
+// 7001)를 동시에 공격한다(SessionRaidRunner) — 보스 HP/처치를 ISessionRegistry로 전 세션에
+// 브로드캐스트한다. 보스는 반격하지 않으므로(Atk=0) 플레이어는 죽지 않는다(순수 DPS 레이스).
+// 제한시간 내 미처치 시 보상 없이 리셋(RaidFailed). 로그인은 여전히 없다(SessionPlayerBinder가
+// 소켓 연결마다 임시 Player를 생성). PvP·실제 로그인·스테이지 시스템은 이후 사이클 과제다.
 
 const int Port = 7777; // examples/EchoServer(9000)와 겹치지 않도록 구분 — 필요 시 동시 실행 가능.
+var raidTimeLimit = TimeSpan.FromSeconds(60); // 이 시간 내에 전원이 힘을 모아 보스를 잡아야 한다.
 
 var levelSystem = PlayerLevelSystem.CreateDefault();
 var monsterTable = MonsterTable.CreateDefault();
@@ -33,26 +39,47 @@ await using var sink = GameEventSink.CreateFile(Path.Combine("logs", "game-event
 // 부착하고, 연결/해제/오류를 sink에 기록한다.
 var binder = new SessionPlayerBinder(levelSystem, sink);
 
-// SessionBattleRunner: binder가 부착한 Player를 읽어 고정 시작 장비 착용 + 고블린 스폰 후
-// 백그라운드 자동 전투를 시작하고, 매 틱 결과를 그 세션에만 푸시한다.
-var battleRunner = new SessionBattleRunner(levelSystem, monsterTable, equipmentTable, sink);
+// ServerNet.CreateSessionRegistry(): 공유 보스 co-op는 보스 HP/처치를 접속한 모든 세션에
+// 브로드캐스트해야 하므로(1단계와 달리 특정 세션 하나에게만 보내는 것으로는 부족) 세션 레지스트리가
+// 필수다 — 반드시 CreateListener에도 같은 인스턴스를 넘겨야 리스너가 접속/해제를 자동 등록/해제한다.
+var registry = ServerNet.CreateSessionRegistry();
 
-// ServerNet.CreateListener(registry: null): 이번 사이클엔 브로드캐스트/전체 세션 열거가 필요
-// 없으므로 세션 레지스트리를 넘기지 않는다(레지스트리 생성·유지 비용 없음). 패킷 전송은 항상
-// 그 세션 하나에게만 이루어진다(공유 보스 co-op 사이클로 미룸).
-IServerListener listener = ServerNet.CreateListener();
+// SessionRaidRunner: binder가 부착한 Player를 읽어 시작 장비를 착용시키고, 공유 레이드 보스(7001)에
+// 대한 세션별 피해 제출 루프를 시작한다. 보스 HP 변경·기여도 판정은 내부 RaidEncounter 액터 루프
+// 하나가 전담하며, 그 결과를 registry.BroadcastAsync로 전 세션에 푸시한다.
+var raidRunner = new SessionRaidRunner(levelSystem, monsterTable, equipmentTable, sink, registry, raidTimeLimit);
 
-// 연결: binder가 먼저 실행되어 Player를 Context에 부착한 뒤에 battleRunner가 그 Player를 읽어
-// 전투를 시작해야 한다. 해제: battleRunner가 먼저 전투 루프를 정지시킨 뒤 binder가 연결 해제를
-// 기록한다. Start() 호출 전에 배선을 마쳐야 한다(이후 설정 시 InvalidOperationException).
+// CancellationTokenSource: Ctrl+C(SIGINT) 기본 동작인 즉시 프로세스 종료 대신, 협조적 취소로
+// 바꾼다 — sink는 await using으로 선언돼 있어 프로세스가 강제 종료되면 NDJSON 파일의 마지막
+// 라인들이 flush되지 못한 채 유실될 수 있다. 기존 스레드 샤딩 데모의 종료 패턴을 그대로 유지.
+// SessionRaidRunner.Start의 수명 토큰으로도 그대로 넘긴다(세션별 CTS와는 무관 — 링크하지 않음,
+// SessionRaidRunner.cs 클래스 주석 참고) — 레이드 액터 루프·보상 드레인 루프, 이 둘만 이 토큰을 직접 받는다.
+using var cts = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) =>
+{
+    e.Cancel = true; // 기본 강제 종료를 막고, 대신 취소 토큰으로 정리할 시간을 준다
+    cts.Cancel();
+};
+
+// 레이드 액터 루프 + 보상 드레인 루프를 먼저 기동한 뒤 리스너를 연다 — 첫 접속이 들어오기 전에
+// SubmitDamage를 받을 준비가 되어 있어야 한다.
+raidRunner.Start(cts.Token);
+
+// ServerNet.CreateListener(registry): 위에서 만든 레지스트리를 그대로 전달 — 리스너가 접속/해제
+// 시 세션을 자동 등록/해제해 registry.BroadcastAsync의 대상 모집단을 채운다.
+IServerListener listener = ServerNet.CreateListener(registry);
+
+// 연결: binder가 먼저 실행되어 Player를 Context에 부착한 뒤에 raidRunner가 그 Player를 읽어
+// 장비 착용 + 제출 루프를 시작해야 한다. 해제: raidRunner가 먼저 제출 루프를 정지시킨 뒤 binder가
+// 연결 해제를 기록한다. Start() 호출 전에 배선을 마쳐야 한다(이후 설정 시 InvalidOperationException).
 listener.OnClientConnected = async session =>
 {
     await binder.OnConnected(session);
-    await battleRunner.OnConnected(session);
+    await raidRunner.OnConnected(session);
 };
 listener.OnClientDisconnected = async session =>
 {
-    await battleRunner.OnDisconnected(session);
+    await raidRunner.OnDisconnected(session);
     await binder.OnDisconnected(session);
 };
 listener.OnClientError = binder.OnError;
@@ -65,16 +92,6 @@ listener.OnClientError = binder.OnError;
 // 누구나 임시 플레이어를 무제한으로 생성할 수 있는 서비스가 인터넷에 노출된다. 로그인 구현 후
 // 재검토한다.
 listener.Start(Port, IPAddress.Loopback);
-
-// CancellationTokenSource: Ctrl+C(SIGINT) 기본 동작인 즉시 프로세스 종료 대신, 협조적 취소로
-// 바꾼다 — sink는 await using으로 선언돼 있어 프로세스가 강제 종료되면 NDJSON 파일의 마지막
-// 라인들이 flush되지 못한 채 유실될 수 있다. 기존 스레드 샤딩 데모의 종료 패턴을 그대로 유지.
-using var cts = new CancellationTokenSource();
-Console.CancelKeyPress += (_, e) =>
-{
-    e.Cancel = true; // 기본 강제 종료를 막고, 대신 취소 토큰으로 정리할 시간을 준다
-    cts.Cancel();
-};
 
 try
 {
