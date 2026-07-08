@@ -21,7 +21,8 @@ namespace GameServer.Systems;
 /// <see cref="BattleManager.CalcFinalDamage"/>로 피해 숫자를 계산하고 <see cref="RaidEncounter.SubmitDamage"/>로
 /// 보낼 뿐, 보스 HP를 절대 직접 건드리지 않는다.</description></item>
 /// <item><description><b>보상 단일 소유 원칙:</b> <see cref="RaidEncounter.RewardReader"/>를 소비하는
-/// <see cref="DrainRewardsAsync"/>(드레인 루프, 1개)는 grant를 해당 세션의
+/// <see cref="RaidRewardApplier.DrainAsync"/>(드레인 루프, 1개, 2026-07-09 SRP 분리로 이 클래스에서
+/// 이관됨)는 grant를 해당 세션의
 /// <see cref="ConcurrentQueue{T}"/>에 enqueue만 할 뿐 <see cref="Player"/>를 절대 직접 만지지 않는다.
 /// <see cref="Player.AddExp"/>/<see cref="Player.AddGold"/>/레벨업 판정은 오직 그 Player를 소유한
 /// <see cref="SubmitLoopAsync"/>만 수행한다 — 서로 다른 스레드가 동시에 같은 Player의
@@ -32,8 +33,10 @@ namespace GameServer.Systems;
 /// 접속했다 끊은 모든 세션의 등록이 <c>Dispose()</c> 전까지 누적된다(누수). 대신 <see cref="OnDisconnected"/>
 /// 에서만 <c>Cancel()</c>하고(서버 종료 시 <c>listener.Stop()</c>이 모든 활성 세션의 해제 콜백을
 /// 구동해 자연히 전파됨), 이 CTS는 <c>Dispose()</c>하지 않는다 — <see cref="SubmitLoopAsync"/>가
-/// 이 토큰으로 <c>Register</c>하지 않으므로(오직 <see cref="Task.Delay(TimeSpan, CancellationToken)"/>
-/// 인자로만 전달) dispose 생략이 안전하다(사이클 1 <c>SessionBattleRunner</c>와 동일 근거).</description></item>
+/// 이 토큰으로 <c>Register</c>하지 않으므로(오직 <see cref="PeriodicTimer.WaitForNextTickAsync(CancellationToken)"/>
+/// 인자로만 전달) dispose 생략이 안전하다(사이클 1 <c>SessionBattleRunner</c>와 동일 근거, 2026-07-09
+/// Task.Delay→PeriodicTimer 전환 이후에도 이 근거는 그대로 유지됨 — 둘 다 토큰을 인자로만 받아
+/// await별로 임시 등록/해제할 뿐, 이 CTS에 영구 콜백을 남기지 않는다).</description></item>
 /// <item><description><b>접속 콜백은 절대 전투 루프를 기다리면 안 된다:</b> <c>SocketPipelineListener.AcceptLoopAsync</c>가
 /// 단일 accept 루프 안에서 <c>OnClientConnected</c>를 직접 await하므로, <see cref="OnConnected"/>는
 /// 세션 제출 루프를 <c>Task.Run</c>으로 fire-and-forget 시작한다(사이클 1과 동일 근거).</description></item>
@@ -135,8 +138,9 @@ public sealed class SessionRaidRunner
     /// 직접 await됩니다. <b>Blocking 여부:</b> Non-blocking — 제출 루프는 <c>Task.Run</c>으로
     /// fire-and-forget 시작하므로 이 메서드 자체는 즉시 반환합니다(accept 루프를 절대 블로킹하지
     /// 않음, 클래스 remarks 참고). <b>Thread Safety:</b> Thread-safe — 세션별 컨텍스트는
-    /// <see cref="ConcurrentDictionary{TKey,TValue}"/>(<see cref="_bySessionId"/>/<see cref="_byInstanceId"/>)
-    /// 로 관리되어 여러 세션이 동시에 접속해도 락 경합 없이 안전하다. <see cref="Player"/> 컨텍스트가
+    /// <see cref="ConcurrentDictionary{TKey,TValue}"/>(<see cref="_bySessionId"/>)로 관리되고, 보상
+    /// 라우팅용 InstanceId 인덱스는 <see cref="RaidRewardApplier"/>가 별도로 소유하므로(2026-07-09
+    /// SRP 분리) 여러 세션이 동시에 접속해도 락 경합 없이 안전하다. <see cref="Player"/> 컨텍스트가
     /// 없거나(<c>TryGetContext</c> 실패) 동일 <c>SessionId</c>가 이미 등록돼 있으면(<c>TryAdd</c> 실패)
     /// no-op으로 조용히 반환한다 — 두 경우 모두 <c>SessionPlayerBinder</c>/리스너가 이미 세션 생명주기를
     /// 보장하는 상황에서만 발생 가능한 방어적 분기다.

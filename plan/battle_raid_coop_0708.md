@@ -225,3 +225,64 @@ dotnet test tests/EchoExample.Tests/EchoExample.Tests.csproj
 - 보스 페이즈/버프(현재 불변식상 `boss.Update` 금지 — 페이즈 도입 시 액터 단일 스레드에서만 재계산하도록 재설계 필요).
 - 아이템 드롭 분배(현재 레이드는 Exp/Gold만 비례 분배, `AcquiredItems`는 미분배).
 - PvP, 실제 로그인(현재도 `AccountId=0` 임시값), 스테이지/스포너(고정 보스 7001·고정 장비 대체).
+
+## 8. 부록: 2026-07-09 구현 상태 검증(코드리뷰 Medium/Low 후속 수정 감사)
+
+§2에 매 수정 직후 "해소됨/보류/반려" 주석을 즉시 달아뒀지만, 그 주석들이 **실제 코드와 정말
+일치하는지**는 별도로 재확인한 적이 없었다. 사용자 요청으로 코드를 직접 grep/Read해 대조한
+결과다 — `dotnet build`/`dotnet test`는 통과했지만(154/154, 0 오류), 이는 XML 문서 주석의
+정확성까지는 검증하지 않는다(`GameServer.csproj`에 `GenerateDocumentationFile`이 없어 `<see
+cref>` 미해결을 컴파일러가 잡지 못함).
+
+### Medium 발견 6건 검증
+
+| 발견 | 문서상 주장 | 실제 코드 검증 |
+|------|------------|----------------|
+| [성능] HP 스로틀 타임스탬프 순서 | `RaidBroadcaster.DrainAsync`에서 await 이후 갱신 | ✅ `RaidBroadcaster.cs` 확인 — `_lastHpBroadcastUtc` 갱신이 `BroadcastPacketAsync` 호출 뒤에 위치 |
+| [보안] `SessionSendTimeout` | `Main.cs`에 유한값 설정 | ✅ `Main.cs:78` `listener.SessionSendTimeout = TimeSpan.FromSeconds(2)` 확인 |
+| [성능] `Task.Delay` 반복 할당 | `PeriodicTimer` 재사용으로 교체 | ✅ `SessionRaidRunner.cs` `SubmitLoopAsync`에 `using var timer = new PeriodicTimer(interval)` 확인 |
+| [스타일] `OnConnected`/`OnDisconnected` XML 문서 | `<param>`/`<remarks>` 추가 | ✅ 확인. **단, 감사 중 이 문서 자체에 깨진 cref 3건을 발견 — 아래 참고** |
+| [아키텍처] `SessionRaidRunner` SRP 위반 | `RaidBroadcaster`/`RaidRewardApplier`로 분리 | ✅ 두 파일 존재, `SessionRaidRunner.Start()`가 둘을 조립하는 구조로 확인 |
+| [스타일] 방어적 분기 미테스트 | 스로틀/라우팅/방어적 분기 테스트 추가 | ✅ `RaidBroadcasterTests`/`RaidRewardApplierTests`/`SessionRaidRunnerEdgeCaseTests` 존재, 154/154 통과 확인 |
+
+나머지 Medium 2건(폴더 물리적 분리, 패킷 이관)은 보류 주석이 정확함을 재확인(코드 변경 없음,
+문서만 존재 — 실제로 미착수 상태와 일치).
+
+### Low 발견 6건(해소) + 6건(보류/반려) 검증
+
+| 발견 | 문서상 주장 | 실제 코드 검증 |
+|------|------------|----------------|
+| `ArrayPool.Rent` 인라인 주석 | `RaidBroadcaster.cs`에 추가 | ✅ 131행 `// ArrayPool<byte>.Shared:` 주석 확인 |
+| `EquipStarterGear` 중복 | `StarterGearEquipper` 공용 헬퍼로 추출 | ✅ 신규 파일 존재, `SessionRaidRunner.cs:151`/`SessionBattleRunner.cs:119` 둘 다 `StarterGearEquipper.Equip(...)` 호출로 확인 |
+| `RunAsync` Emit+onStep 중복 | `EmitAndBroadcastAsync` 로컬 함수로 통합 | ✅ `RaidEncounter.cs`에 로컬 함수 정의 + 2회 호출 확인 |
+| `MakeBoss` 테스트 헬퍼 중복 | `RaidTestBoss` 공용 클래스로 추출 | ✅ 신규 파일 존재, 양쪽 테스트 파일에서 `RaidTestBoss.Make(...)` 호출로 확인 |
+| `RaidStepBroadcast` 위치 인자 | 전체 named 인자로 전환 | ✅ `BuildBroadcast`의 두 생성 지점 모두 `Event:`/`CurrentHp:` 등 named 인자 확인 |
+| onStep 동기 await(HIGH와 동일 원인) | XML 문서 정정 | ✅ 낡은 "차후 사이클에서 분리 예정" 문구 부재 확인(grep 결과 없음), 새 문구로 교체됨 확인 |
+| `_boss` 이중 소유 / 판정 코어 상태 혼입 / 구체 클래스 DIP / 연결 상한 없음 / 생성자 파라미터 7개 | 보류 | ✅ 코드 변경 없음 확인 — 보류 상태와 일치 |
+| 보스 HP 게이지가 스로틀 우회 | 반려(의도된 동작) | ✅ `RaidEncounter.cs`의 `sink.RecordRaidBossHpPercent(...)` 호출이 여전히 스로틀 판정 밖(루프 최상위)에 위치 — 반려 근거와 일치 |
+
+### 검증 중 발견 및 수정: `SessionRaidRunner.cs`의 깨진 XML 문서 참조 3건
+
+같은 클래스를 세 번의 개별 커밋(HIGH 수정 → Medium 성능/스타일 수정 → Medium 아키텍처 SRP
+분리)에 걸쳐 편집하면서, 앞선 커밋에서 작성한 XML 문서가 뒤 커밋의 코드 변경을 반영하지 못한
+채 남아있었다. `GameServer.csproj`에 `GenerateDocumentationFile`이 없어 `<see cref>` 미해결을
+컴파일러가 검증하지 않으므로 `dotnet build`가 조용히 통과해, 이번처럼 직접 대조하지 않으면
+드러나지 않는 종류의 드리프트다.
+
+1. 클래스 remarks "보상 단일 소유 원칙" 항목이 `<see cref="DrainRewardsAsync"/>`를 참조 — 이
+   메서드는 SRP 분리로 `RaidRewardApplier.DrainAsync`로 이관되며 삭제됨. → cref/설명을
+   `RaidRewardApplier.DrainAsync`로 교체.
+2. 클래스 remarks "세션 CTS는 링크하지 않는다" 항목이 `<see cref="Task.Delay(TimeSpan,
+   CancellationToken)"/>`를 근거로 듦 — `SubmitLoopAsync`는 성능 수정으로 `PeriodicTimer`를 씀.
+   → cref를 `PeriodicTimer.WaitForNextTickAsync(CancellationToken)`로 교체, 근거(토큰을 인자로만
+   받아 await별 임시 등록/해제, 영구 콜백 없음)는 전환 후에도 유효함을 명시.
+3. `OnConnected`의 Thread Safety remarks가 `<see cref="_byInstanceId"/>`를 참조 — 이 필드는 SRP
+   분리로 `RaidRewardApplier`의 내부 인덱스로 대체되며 삭제됨. → cref 제거, "보상 라우팅용
+   InstanceId 인덱스는 `RaidRewardApplier`가 별도 소유" 문구로 교체.
+
+세 곳 모두 순수 문서 정정이라 동작 변경 없음 — 수정 후 `dotnet build`(0 오류) /
+`dotnet test tests/GameServer.Tests`(154/154) 재확인 완료.
+
+**재발 방지 메모:** 한 클래스를 여러 커밋에 걸쳐 리팩토링할 때는 그 클래스의 기존 클래스/메서드
+레벨 XML 문서도 함께 훑어 삭제·이동된 멤버를 가리키는 `<see cref>`가 없는지 확인해야 한다 —
+`GenerateDocumentationFile` 없이는 컴파일러가 대신 잡아주지 않는다.
