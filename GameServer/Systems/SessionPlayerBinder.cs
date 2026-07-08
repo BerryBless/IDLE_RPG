@@ -109,6 +109,15 @@ public sealed class SessionPlayerBinder
     /// <param name="exception">발생한 예외</param>
     /// <returns>완료된(무할당) <see cref="ValueTask"/></returns>
     /// <remarks>
+    /// <b>현재 사이클에서는 사실상 도달하지 않습니다:</b> ServerLib 소스 확인 결과
+    /// (<c>SocketPipelineSession.DispatchPacketAsync</c>), <c>OnReceived</c>가 배선되지 않은 세션은
+    /// PING이 아닌 패킷을 그냥 무시하고 <see cref="ValueTask.CompletedTask"/>를 반환합니다 — 즉
+    /// 패킷 본문 역직렬화 자체가 일어나지 않으므로 이 경로에서 예외가 나지 않습니다. Main.cs가
+    /// 아직 <c>OnReceived</c>를 배선하지 않는 이번 사이클에는 이 콜백이 호출될 경로가 없습니다
+    /// (그래서 전용 테스트도 추가하지 않았습니다 — 도달 불가능한 경로를 인위적으로 트리거하는
+    /// 테스트는 다음 사이클에서 실제 프로토콜 파싱이 도입될 때 함께 작성하는 편이 낫습니다).
+    /// <see cref="IServerListener"/> 콜백 계약을 온전히 구현해 두는 것은, 프로토콜이 추가되는
+    /// 즉시(<c>OnReceived</c> 배선 시점) 이 경로가 자동으로 살아나게 하기 위함입니다.
     /// ServerLib는 오류 발생 시 <c>OnClientError</c>를 호출한 뒤 반드시 <c>OnClientDisconnected</c>도
     /// 호출합니다(세션 정리는 항상 뒤따름). 따라서 오류가 난 연결은 NDJSON 로그에
     /// <c>PlayerConnectionError</c>와 <c>PlayerDisconnected</c> 두 줄이 남는 것이 정상입니다.

@@ -11,9 +11,14 @@
 **예제 코드 위치:** 각 프로젝트의 `Program.cs`가 라이브러리/서버 사용 예제 역할을 한다.
 프로젝트가 늘어남에 따라 이 섹션에 프로젝트별 한 줄 요약을 추가할 것.
 
-- `ServerLib`: 고성능 .NET 10 비동기 소켓 서버 라이브러리(System.IO.Pipelines 기반 Zero-copy 송수신, 세션·하트비트·RUDP 포함). ClaudeCodeStudy에서 소스 반입, 향후 `GameServer`가 참조할 네트워킹 기반.
+- `ServerLib`: 고성능 .NET 10 비동기 소켓 서버 라이브러리(System.IO.Pipelines 기반 Zero-copy 송수신, 세션·하트비트·RUDP 포함). ClaudeCodeStudy에서 소스 반입, `GameServer`가 참조하는 네트워킹 기반.
 - `examples/EchoServer`: `ServerLib.ServerNet.CreateListener()`로 포트 9000 TCP 에코 서버를 띄우는 최소 예제. 실행: `dotnet run --project examples/EchoServer`.
 - `examples/EchoClient`: `ServerLib.ServerNet.CreateClient()`로 에코 서버에 접속해 콘솔 입력을 송수신하는 예제. 실행: `dotnet run --project examples/EchoClient`.
+- `GameServer`: 포트 7777에서 실제 TCP 클라이언트를 받는 게임 서버(`Main.cs`). 로그인은 아직 없음 —
+  소켓 연결 시 `SessionPlayerBinder`가 임시 `Player`를 생성해 `session.Context`에 부착하고,
+  해제 시 정리 이벤트를 `logs/game-events.ndjson`에 남긴다(전투 프로토콜은 다음 사이클). 실행:
+  `dotnet run --project GameServer`. 이전의 400명 스레드 샤딩 자동배틀 콘솔 데모는 제거됨(git 이력에
+  보존, `Systems/BattleLoop.cs` 등 도메인 클래스와 단위 테스트는 그대로 유지).
 
 새 기능을 추가할 때 Program.cs의 예제도 함께 업데이트할 것.
 
@@ -70,6 +75,7 @@ plan/<기능명>_<MMDD>.md
 | [gameserver_domain_scaffold_0704.md](plan/gameserver_domain_scaffold_0704.md) | mermaid classDiagram 기반 GameServer 도메인 모델(스탯·전투·아이템·엔티티·보상) 스켈레톤 스캐폴딩. §8에 2026-07-05 기준 구현 상태 classDiagram·원본 대비 델타표 추가 |
 | [battle_system_0705.md](plan/battle_system_0705.md) | 방치형 전투 플로우 설계(온라인 실시간 틱 + 오프라인 수식 하이브리드) 및 TDD 구현: 스탯 집계 파이프라인·버프·보상·오프라인 정산·코드리뷰 수정(F1~F11)·단일 Player vs Monster `BattleLoop` 무한 루프 완료(`GameServer.Tests` 63개), Stage/Wave/Spawner/스킬/부활코스트는 다음 사이클 |
 | [serverlib_echo_import_0708.md](plan/serverlib_echo_import_0708.md) | ClaudeCodeStudy `ServerLib`(고성능 소켓 서버 라이브러리) 소스 반입 설계. `ServerLib`는 루트 직속(GameServer와 동급), `EchoServer`/`EchoClient`는 `examples/`, 자동 테스트는 `tests/EchoExample.Tests`. 에코 왕복 스모크 테스트로 1차 검증, GameServer 통합은 다음 사이클 |
+| [client_server_split_0708.md](plan/client_server_split_0708.md) | 클라-서버 분리 1단계: GameServer의 400명 스레드 샤딩 데모를 제거하고 `ServerNet` 기반 실제 TCP 서버(포트 7777)로 교체. 로그인 생략, 소켓 연결마다 `SessionPlayerBinder`가 임시 `Player`를 생성해 `session.Context`에 부착. 실소켓 통합 테스트로 연결→해제 사이클 검증, 게임플레이 프로토콜(OnReceived)과 실제 로그인은 다음 사이클 |
 
 ---
 
