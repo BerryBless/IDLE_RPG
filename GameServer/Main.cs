@@ -69,6 +69,14 @@ raidRunner.Start(cts.Token);
 // 시 세션을 자동 등록/해제해 registry.BroadcastAsync의 대상 모집단을 채운다.
 IServerListener listener = ServerNet.CreateListener(registry);
 
+// SessionSendTimeout: 코드리뷰 발견(docs/code-reviews/2026-07-08-shared-boss-raid-coop-review.md,
+// 보안 Medium/CWE-400) 수정 — 미설정(기본 null=무한 대기) 상태였다면 수신 버퍼를 비우지 않는
+// 정지된 피어 하나가 registry.BroadcastAsync를 영원히 붙잡을 수 있었다(SessionRaidRunner의
+// 브로드캐스트 드레인 태스크가 그 피어에서 멈춤). 유한값으로 설정해 시한 초과 시 그 세션의 송신만
+// SocketException으로 끊고 나머지 브로드캐스트는 계속되게 한다. Start() 호출 전에 설정해야 한다
+// (IServerListener.SessionSendTimeout은 Not thread-safe, 이미 수락된 세션에는 소급 적용 안 됨).
+listener.SessionSendTimeout = TimeSpan.FromSeconds(2);
+
 // 연결: binder가 먼저 실행되어 Player를 Context에 부착한 뒤에 raidRunner가 그 Player를 읽어
 // 장비 착용 + 제출 루프를 시작해야 한다. 해제: raidRunner가 먼저 제출 루프를 정지시킨 뒤 binder가
 // 연결 해제를 기록한다. Start() 호출 전에 배선을 마쳐야 한다(이후 설정 시 InvalidOperationException).

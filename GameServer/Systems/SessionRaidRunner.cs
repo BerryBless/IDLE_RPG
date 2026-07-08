@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Threading.Channels;
 using GameServer.Entities;
 using GameServer.Items;
 using ServerLib.Core;
@@ -41,6 +42,16 @@ namespace GameServer.Systems;
 /// <item><description><b>접속 콜백은 절대 전투 루프를 기다리면 안 된다:</b> <c>SocketPipelineListener.AcceptLoopAsync</c>가
 /// 단일 accept 루프 안에서 <c>OnClientConnected</c>를 직접 await하므로, <see cref="OnConnected"/>는
 /// 세션 제출 루프를 <c>Task.Run</c>으로 fire-and-forget 시작한다(사이클 1과 동일 근거).</description></item>
+/// <item><description><b>브로드캐스트는 액터 루프와 완전히 분리되어 있다(코드리뷰 HIGH 발견 수정,
+/// 2026-07-08):</b> <see cref="RaidEncounter.RunAsync"/>의 <c>onStep</c> 콜백(<see cref="BroadcastStepAsync"/>)은
+/// <see cref="_broadcastChannel"/>에 <c>TryWrite</c>만 하고 즉시 반환한다 — 실제
+/// <see cref="ISessionRegistry.BroadcastAsync"/> 네트워크 전송은 별도 드레인 태스크
+/// (<see cref="BroadcastDrainAsync"/>)가 전담한다. 이전에는 <c>onStep</c>이 브로드캐스트를 직접
+/// 동기 await해, 수신 버퍼를 비우지 않는 정지된 클라이언트 1명이 <c>SessionSendTimeout</c> 미설정
+/// 시 레이드 액터 전체를 무한 정지시키고 무경계 <c>_damageChannel</c>이 무한 증가하는 OOM 경로가
+/// 있었다(<c>docs/code-reviews/2026-07-08-shared-boss-raid-coop-review.md</c> HIGH 발견). 지금은
+/// 브로드캐스트가 아무리 느리거나 영원히 끝나지 않아도 액터의 피해 처리·기여도 집계·데드라인 판정은
+/// 전혀 영향받지 않는다.</description></item>
 /// </list>
 /// </remarks>
 public sealed class SessionRaidRunner
@@ -79,8 +90,19 @@ public sealed class SessionRaidRunner
     // 항상 1:1로 동기화된다(OnConnected/OnDisconnected에서 두 딕셔너리를 함께 갱신).
     private readonly ConcurrentDictionary<string, SessionRaidContext> _byInstanceId = new();
 
-    // DateTime(액터 스레드 전용 필드): _raid.RunAsync의 onStep 콜백(BroadcastStepAsync)은 액터의 단일
-    // 스레드에서만 순차 호출되므로(RaidEncounter의 액터 불변식과 동일) 이 필드에 락이 필요 없다.
+    // Channel<RaidStepBroadcast>: 액터(생산자, onStep 콜백을 통해)→브로드캐스트 드레인 태스크(단일
+    // 소비자) 큐. 액터는 여기 TryWrite만 하고 실제 네트워크 브로드캐스트(느리거나 영원히 끝나지 않을
+    // 수 있음)를 전혀 기다리지 않는다 — 코드리뷰 HIGH 발견(느린/정지된 클라이언트가 액터를 무한
+    // 정지시켜 무경계 _damageChannel이 무한 증가하는 OOM 경로) 수정: 브로드캐스트를 액터 루프에서
+    // 완전히 분리한다. SingleWriter=true(onStep은 액터의 단일 스레드에서만 순차 호출),
+    // SingleReader=true(드레인 태스크 1개). Unbounded — 원소가 작은 값 타입 struct라 소비가 밀려도
+    // 액터 자체의 가용성에는 영향이 없다(액터는 이 채널에 절대 TryRead/await하지 않음).
+    private readonly Channel<RaidStepBroadcast> _broadcastChannel = Channel.CreateUnbounded<RaidStepBroadcast>(
+        new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+
+    // DateTime(브로드캐스트 드레인 태스크 전용 필드): BroadcastDrainAsync는 단일 소비자이므로 이
+    // 필드의 유일한 리더/라이터다(락 불필요) — 코드리뷰 HIGH 수정으로 액터 스레드에서 이 드레인
+    // 태스크로 소유권이 이관됐다.
     private DateTime _lastHpBroadcastUtc = DateTime.MinValue;
 
     private sealed class SessionRaidContext
@@ -123,16 +145,17 @@ public sealed class SessionRaidRunner
         _raid = new RaidEncounter(_boss, raidTimeLimit);
     }
 
-    /// <summary>레이드 액터 루프와 보상 드레인 루프를 서버 수명 동안 1회 시작한다.</summary>
+    /// <summary>레이드 액터 루프·보상 드레인 루프·브로드캐스트 드레인 루프를 서버 수명 동안 1회 시작한다.</summary>
     /// <param name="lifetimeToken">서버 종료 시 취소되는 수명 토큰(세션별 CTS와는 무관 — 링크하지 않음)</param>
     /// <remarks>
-    /// <b>Blocking 여부:</b> Non-blocking. 두 루프 모두 <c>Task.Run</c>으로 fire-and-forget 시작한다 —
+    /// <b>Blocking 여부:</b> Non-blocking. 세 루프 모두 <c>Task.Run</c>으로 fire-and-forget 시작한다 —
     /// 호출자(<c>Main.cs</c>)는 이 메서드 반환 직후 <c>listener.Start</c>로 진행할 수 있다.
     /// </remarks>
     public void Start(CancellationToken lifetimeToken)
     {
         _ = Task.Run(() => _raid.RunAsync(_sink, lifetimeToken, BroadcastStepAsync), lifetimeToken);
         _ = Task.Run(() => DrainRewardsAsync(lifetimeToken), lifetimeToken);
+        _ = Task.Run(() => BroadcastDrainAsync(lifetimeToken), lifetimeToken);
     }
 
     /// <summary>접속 시 시작 장비를 착용시키고 이 세션의 보스 공격 제출 루프를 시작한다.</summary>
@@ -241,30 +264,65 @@ public sealed class SessionRaidRunner
     }
 
     /// <summary>
-    /// <see cref="RaidEncounter.RunAsync"/>의 onStep 콜백. HP 전용 스텝(None/BossDamaged)은
-    /// <see cref="HpBroadcastThrottle"/> 간격으로 스로틀하고, 처치/실패는 항상 즉시 브로드캐스트한다.
+    /// <see cref="RaidEncounter.RunAsync"/>의 onStep 콜백. <see cref="_broadcastChannel"/>에
+    /// <c>TryWrite</c>만 하고 즉시 반환한다 — 실제 네트워크 전송·스로틀 판정은 전혀 하지 않는다.
     /// </summary>
-    /// <remarks>액터의 단일 스레드에서만 호출되므로 <see cref="_lastHpBroadcastUtc"/> 갱신에 락이
-    /// 필요 없다(클래스 remarks 참고).</remarks>
-    private async ValueTask BroadcastStepAsync(RaidStepBroadcast info, CancellationToken cancellationToken)
+    /// <remarks>
+    /// <b>Blocking 여부:</b> Non-blocking, 동기 반환(async 상태 머신조차 없음). 무경계 채널의
+    /// <c>TryWrite</c>는 항상 즉시 성공한다. <b>코드리뷰 HIGH 발견 수정:</b> 이전에는 여기서
+    /// <c>registry.BroadcastAsync</c>를 직접 동기 await해, 정지된 클라이언트 1명이 레이드 액터
+    /// 전체를 무한 정지시킬 수 있었다(클래스 remarks 참고). 실제 전송·스로틀은
+    /// <see cref="BroadcastDrainAsync"/>가 별도 태스크에서 전담한다.
+    /// </remarks>
+    private ValueTask BroadcastStepAsync(RaidStepBroadcast info, CancellationToken cancellationToken)
     {
-        bool isThrottledHpOnly = info.Event is RaidEventType.None or RaidEventType.BossDamaged;
-        if (isThrottledHpOnly)
-        {
-            var now = DateTime.UtcNow;
-            if (now - _lastHpBroadcastUtc < HpBroadcastThrottle)
-            {
-                return; // 스로틀 — 이번 HP 브로드캐스트는 건너뛴다(보스 판정 자체는 계속 진행됨)
-            }
-            _lastHpBroadcastUtc = now;
-        }
+        _broadcastChannel.Writer.TryWrite(info);
+        return ValueTask.CompletedTask;
+    }
 
-        var (death, hp) = RaidBroadcastPackets.Build(info);
-        if (death is not null)
+    /// <summary>
+    /// <see cref="_broadcastChannel"/>을 소비하며 실제 네트워크 브로드캐스트와 HP 스로틀 판정을
+    /// 전담하는 단일 드레인 태스크. 레이드 액터 루프와 완전히 분리되어 있어, 느리거나 영원히
+    /// 끝나지 않는 전송이 있어도 액터의 피해 처리·기여도 집계·데드라인 판정에는 전혀 영향이 없다.
+    /// </summary>
+    /// <remarks>
+    /// <b>Blocking 여부:</b> Non-blocking. <c>ReadAllAsync</c>와 실제 브로드캐스트 <c>await</c>에서만
+    /// 대기하며 호출 스레드를 점유하지 않는다. <b>Thread Safety:</b> 이 태스크가
+    /// <see cref="_lastHpBroadcastUtc"/>의 유일한 리더/라이터다(단일 소비자, 락 불필요).
+    /// <b>코드리뷰 Medium 발견 수정:</b> 스로틀 타임스탬프를 브로드캐스트 <c>await</c> 완료
+    /// <b>이후</b>에 찍는다 — 이전에는 await 이전에 찍어, 브로드캐스트 1회가
+    /// <see cref="HpBroadcastThrottle"/>(150ms)를 넘으면 다음 스텝이 항상 "이미 경과함"으로 판정돼
+    /// 스로틀이 사실상 무력화됐다(보호가 가장 필요한 느린 구간에서 정확히 보호가 사라지는 버그).
+    /// </remarks>
+    private async Task BroadcastDrainAsync(CancellationToken lifetimeToken)
+    {
+        try
         {
-            await BroadcastPacketAsync(death, cancellationToken);
+            await foreach (var info in _broadcastChannel.Reader.ReadAllAsync(lifetimeToken))
+            {
+                bool isThrottledHpOnly = info.Event is RaidEventType.None or RaidEventType.BossDamaged;
+                if (isThrottledHpOnly && DateTime.UtcNow - _lastHpBroadcastUtc < HpBroadcastThrottle)
+                {
+                    continue; // 스로틀 — 이번 HP 브로드캐스트는 건너뛴다(보스 판정 자체는 이미 끝난 뒤라 영향 없음)
+                }
+
+                var (death, hp) = RaidBroadcastPackets.Build(info);
+                if (death is not null)
+                {
+                    await BroadcastPacketAsync(death, lifetimeToken);
+                }
+                await BroadcastPacketAsync(hp, lifetimeToken);
+
+                if (isThrottledHpOnly)
+                {
+                    _lastHpBroadcastUtc = DateTime.UtcNow; // await 완료 후 갱신 — 위 remarks 참고
+                }
+            }
         }
-        await BroadcastPacketAsync(hp, cancellationToken);
+        catch (OperationCanceledException)
+        {
+            // 정상 종료(서버 수명 토큰 취소).
+        }
     }
 
     /// <summary>패킷 1개를 직렬화해 접속한 모든 세션에 브로드캐스트한다.</summary>

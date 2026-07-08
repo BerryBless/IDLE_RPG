@@ -38,14 +38,26 @@
 | HP 브로드캐스트 스로틀 | ~150ms 간격 제한(처치/실패는 항상 즉시) | 매 스텝마다 무조건 브로드캐스트 | N명 접속 시 틱당 N×N 전송 방지. 판정 자체(`RaidEncounter`)는 스로틀을 모른다 — 순수하게 네트워크 계층(`SessionRaidRunner`)의 책임 |
 | 세대(Generation) 전달 방식 | `RaidStepBroadcast`가 `DeadGeneration`/`NewGeneration`을 명시적 필드로 둘 다 전달 | 네트워크 계층이 `Generation - 1`로 역산 | 액터가 이미 아는 값을 그대로 실어 보내 매퍼가 내부 증가 규칙을 추론할 필요를 없앰 |
 
-### 알려진 한계(v1, 다음 사이클 개선 대상)
+### 알려진 한계(v1, 다음 사이클 개선 대상) — 2026-07-08 코드리뷰 후속 수정으로 해소됨
 
-`onStep` 콜백(브로드캐스트 포함)은 액터의 `await foreach` 안에서 동기적으로 `await`된다 — 한
+~~`onStep` 콜백(브로드캐스트 포함)은 액터의 `await foreach` 안에서 동기적으로 `await`된다 — 한
 세션의 전송이 느려지면 그동안 액터의 다음 피해 소비가 지연되어 보스 처리가 **전원에 대해** 잠시
 멈출 수 있다(`CheckDeadline`도 같이 밀림). 루프백 소켓의 소형 패킷 환경에서는 드러나지 않지만,
-실사용 환경에서 느린 클라이언트가 전체를 막는 구조적 결합이다 — HP/Generation 순서 정확성을
-공짜로 얻는 대가로 이 결합을 받아들이고, 브로드캐스트를 별도 채널+드레인 태스크로 분리하는 개선은
-다음 사이클로 미룬다.
+실사용 환경에서 느린 클라이언트가 전체를 막는 구조적 결합이다.~~
+
+**해소됨:** 종합 코드 리뷰(`docs/code-reviews/2026-07-08-shared-boss-raid-coop-review.md`, HIGH
+발견 — 성능·보안·아키텍처 3개 도메인이 독립적으로 같은 근본 원인을 지적)에서 이 결합이 단순한
+지연을 넘어 무경계 `_damageChannel`의 무한 증가(OOM)로 이어질 수 있음이 확인되어, 예정보다
+앞당겨 이번 사이클 내에 수정했다. `SessionRaidRunner`가 `onStep`(`BroadcastStepAsync`)을 이제
+`_broadcastChannel`(신규, 액터→드레인 태스크 전용 채널)에 `TryWrite`만 하는 트리비얼 패스스루로
+바꾸고, 실제 네트워크 전송·HP 스로틀 판정은 별도 `BroadcastDrainAsync` 드레인 태스크로 완전히
+분리했다 — 액터는 브로드캐스트가 얼마나 느리거나 영원히 끝나지 않아도 전혀 영향받지 않는다.
+같은 수정에서 스로틀 타임스탬프를 `await` 완료 이후에 찍도록 순서도 바로잡았고(이전에는 await
+이전에 찍어 브로드캐스트가 150ms를 넘으면 스로틀이 무력화됐다), `Main.cs`에
+`listener.SessionSendTimeout`(보안 Medium 발견의 완화책)도 함께 추가했다. 회귀 검증:
+`SessionRaidRunnerBroadcastDecouplingTests.NeverRespondingBroadcast_DoesNotBlockActorDamageProcessing`
+— 브로드캐스트가 절대 반환하지 않는 가짜 레지스트리를 주입해도 액터가 계속 전진함을 게이지 기록
+횟수로 직접 검증한다.
 
 ## 3. 컴포넌트 구조
 
@@ -148,8 +160,7 @@ dotnet test tests/EchoExample.Tests/EchoExample.Tests.csproj
 
 ## 7. 향후 확장 포인트
 
-- **브로드캐스트를 액터 루프에서 분리**(§2 "알려진 한계" 참고) — 별도 채널+드레인 태스크로 액터를
-  네트워크 I/O에서 완전히 분리.
+- ~~브로드캐스트를 액터 루프에서 분리~~ — **완료(2026-07-08 코드리뷰 후속 수정, §2 참고).**
 - 브로드캐스트 스로틀 정교화(HP diff 임계·적응형 주기), 신규 접속자에게 현재 보스 HP 스냅샷 1회 즉시 푸시.
 - 보스 페이즈/버프(현재 불변식상 `boss.Update` 금지 — 페이즈 도입 시 액터 단일 스레드에서만 재계산하도록 재설계 필요).
 - 아이템 드롭 분배(현재 레이드는 Exp/Gold만 비례 분배, `AcquiredItems`는 미분배).
