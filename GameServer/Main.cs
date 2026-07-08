@@ -3,42 +3,60 @@
 global using BigNumber = double;
 
 using System.Net;
+using GameServer.Items;
 using GameServer.Systems;
 using ServerLib;
 using ServerLib.Interface;
 
 // 클라-서버 분리 1단계: 이전까지 GameServer는 400명의 가상 플레이어가 스레드 샤딩으로 자동
 // 전투하는 콘솔 데모였다(스레드 샤딩 배틀/레이드 코드는 git 이력에 보존, Systems/BattleLoop.cs
-// 등 도메인 클래스 자체는 그대로 유지되며 각자의 단위 테스트가 계속 커버한다). 이번 사이클부터는
-// 실제 TCP 클라이언트가 접속할 수 있는 네트워크 서버로 전환한다.
+// 등 도메인 클래스 자체는 그대로 유지되며 각자의 단위 테스트가 계속 커버한다). 그 사이클에서는
+// 실제 TCP 클라이언트가 접속할 수 있는 네트워크 서버로 전환했다.
 //
-// 이번 사이클 범위는 "연결↔Player 배선"까지다 — 로그인은 아직 없다. 소켓이 연결될 때마다
-// SessionPlayerBinder가 임시 Player를 하나 생성해 그 연결에 부착하고, 해제되면 정리 이벤트만
-// 남긴다. 전투 명령 등 실제 게임플레이 프로토콜(OnReceived)은 다음 사이클 과제다.
+// 전투 멀티플레이 1단계(이번 사이클): 접속한 각 클라이언트가 자신만의 독립적인 몬스터를
+// 서버 자동 틱(방치형 스타일)으로 동시에 사냥한다 — 클라이언트는 명령을 보내지 않고
+// MobHpPacket/MobDeathPacket 결과만 수신한다. 로그인은 여전히 없다(SessionPlayerBinder가 소켓
+// 연결마다 임시 Player를 생성). 공유 보스 co-op·PvP·실제 로그인은 이후 사이클 과제다.
 
 const int Port = 7777; // examples/EchoServer(9000)와 겹치지 않도록 구분 — 필요 시 동시 실행 가능.
 
 var levelSystem = PlayerLevelSystem.CreateDefault();
+var monsterTable = MonsterTable.CreateDefault();
+var equipmentTable = EquipmentTable.CreateDefault();
 
 // GameEventSink: 다수 I/O 스레드(생산자)가 Record*로 메트릭+NDJSON 라인을 밀어넣고, 내부 단일
 // 소비자 태스크가 파일에 flush한다. 2026-07-07 관측성 전환 이후 Main.cs는 콘솔에 직접 출력하지
 // 않는다 — 이 규칙은 네트워크 서버로 전환한 뒤에도 그대로 유지한다.
 await using var sink = GameEventSink.CreateFile(Path.Combine("logs", "game-events.ndjson"));
 
-// SessionPlayerBinder: ISession을 다루는 유일한 지점. PlayerFactory.CreateTemp로 임시 Player를
-// 만들어 session.Context에 부착하고, 연결/해제/오류를 sink에 기록한다.
+// SessionPlayerBinder: PlayerFactory.CreateTemp로 임시 Player를 만들어 session.Context에
+// 부착하고, 연결/해제/오류를 sink에 기록한다.
 var binder = new SessionPlayerBinder(levelSystem, sink);
 
+// SessionBattleRunner: binder가 부착한 Player를 읽어 고정 시작 장비 착용 + 고블린 스폰 후
+// 백그라운드 자동 전투를 시작하고, 매 틱 결과를 그 세션에만 푸시한다.
+var battleRunner = new SessionBattleRunner(levelSystem, monsterTable, equipmentTable, sink);
+
 // ServerNet.CreateListener(registry: null): 이번 사이클엔 브로드캐스트/전체 세션 열거가 필요
-// 없으므로 세션 레지스트리를 넘기지 않는다(레지스트리 생성·유지 비용 없음).
+// 없으므로 세션 레지스트리를 넘기지 않는다(레지스트리 생성·유지 비용 없음). 패킷 전송은 항상
+// 그 세션 하나에게만 이루어진다(공유 보스 co-op 사이클로 미룸).
 IServerListener listener = ServerNet.CreateListener();
 
-// 콜백은 메서드 그룹으로 그대로 대입 — Start() 호출 전에 배선을 마쳐야 한다(이후 설정 시
-// InvalidOperationException).
-listener.OnClientConnected = binder.OnConnected;
-listener.OnClientDisconnected = binder.OnDisconnected;
+// 연결: binder가 먼저 실행되어 Player를 Context에 부착한 뒤에 battleRunner가 그 Player를 읽어
+// 전투를 시작해야 한다. 해제: battleRunner가 먼저 전투 루프를 정지시킨 뒤 binder가 연결 해제를
+// 기록한다. Start() 호출 전에 배선을 마쳐야 한다(이후 설정 시 InvalidOperationException).
+listener.OnClientConnected = async session =>
+{
+    await binder.OnConnected(session);
+    await battleRunner.OnConnected(session);
+};
+listener.OnClientDisconnected = async session =>
+{
+    await battleRunner.OnDisconnected(session);
+    await binder.OnDisconnected(session);
+};
 listener.OnClientError = binder.OnError;
-// OnReceived는 아직 배선하지 않는다 — 이번 사이클엔 게임플레이 프로토콜이 없다.
+// OnReceived는 아직 배선하지 않는다 — 전투는 서버 자동 틱이라 클라이언트가 보낼 명령이 없다.
 
 // IdleTimeout은 설정하지 않는다: 하트비트/핑 프로토콜이 아직 없어, 설정하면 정상 연결도 유휴로
 // 오판해 즉시 스윕된다. 프로토콜이 생기는 사이클에서 함께 도입한다.
