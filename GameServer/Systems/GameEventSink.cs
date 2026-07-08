@@ -119,6 +119,21 @@ public sealed class GameEventSink : IAsyncDisposable
         => JsonSerializer.Serialize(new GameEventLine(Ts(ts), "TickException", playerId, Error: error),
             GameEventJsonContext.Default.GameEventLine);
 
+    /// <summary>소켓 연결(임시 플레이어 배정) 이벤트를 NDJSON 한 줄로 포맷한다(순수 함수, 테스트 대상).</summary>
+    internal static string PlayerConnectedLine(DateTime ts, string playerId, int level)
+        => JsonSerializer.Serialize(new GameEventLine(Ts(ts), "PlayerConnected", playerId, level),
+            GameEventJsonContext.Default.GameEventLine);
+
+    /// <summary>소켓 연결 해제 이벤트를 NDJSON 한 줄로 포맷한다(순수 함수, 테스트 대상).</summary>
+    internal static string PlayerDisconnectedLine(DateTime ts, string playerId)
+        => JsonSerializer.Serialize(new GameEventLine(Ts(ts), "PlayerDisconnected", playerId),
+            GameEventJsonContext.Default.GameEventLine);
+
+    /// <summary>연결 중 발생한 오류(OnClientError)를 NDJSON 한 줄로 포맷한다(순수 함수, 테스트 대상).</summary>
+    internal static string PlayerConnectionErrorLine(DateTime ts, string playerId, string error)
+        => JsonSerializer.Serialize(new GameEventLine(Ts(ts), "PlayerConnectionError", playerId, Error: error),
+            GameEventJsonContext.Default.GameEventLine);
+
     /// <summary>몬스터 처치 이벤트를 기록한다: 카운터 1 증가 + NDJSON 한 줄 기록.</summary>
     public void RecordMonsterDefeated(string playerId, int level, BigNumber exp, BigNumber gold)
     {
@@ -156,6 +171,27 @@ public sealed class GameEventSink : IAsyncDisposable
 
     /// <summary>레이드 보스 현재 HP 비율을 게이지에 기록한다. 연속 상태라 NDJSON 라인은 남기지 않는다.</summary>
     public void RecordRaidBossHpPercent(double percent) => _metrics.RaidBossHpPercent(percent);
+
+    /// <summary>소켓 연결(임시 플레이어 배정) 이벤트를 기록한다: 카운터 1 증가 + NDJSON 한 줄 기록.</summary>
+    public void RecordPlayerConnected(string playerId, int level)
+    {
+        _metrics.PlayerConnected();
+        _lineChannel.Writer.TryWrite(PlayerConnectedLine(DateTime.UtcNow, playerId, level));
+    }
+
+    /// <summary>소켓 연결 해제 이벤트를 기록한다: 카운터 1 증가 + NDJSON 한 줄 기록.</summary>
+    public void RecordPlayerDisconnected(string playerId)
+    {
+        _metrics.PlayerDisconnected();
+        _lineChannel.Writer.TryWrite(PlayerDisconnectedLine(DateTime.UtcNow, playerId));
+    }
+
+    /// <summary>연결 중 발생한 오류(OnClientError)를 기록한다: 카운터 1 증가 + NDJSON 한 줄 기록.</summary>
+    public void RecordPlayerConnectionError(string playerId, Exception exception)
+    {
+        _metrics.PlayerConnectionError();
+        _lineChannel.Writer.TryWrite(PlayerConnectionErrorLine(DateTime.UtcNow, playerId, exception.Message));
+    }
 
     /// <summary>더 이상 라인이 생성되지 않음을 알린다(채널 완료 신호).</summary>
     public void CompleteWriting() => _lineChannel.Writer.TryComplete();

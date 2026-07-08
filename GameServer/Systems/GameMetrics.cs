@@ -25,6 +25,9 @@ public sealed class GameMetrics : IDisposable
     private readonly Counter<long> _raidBossDefeated;
     private readonly Counter<long> _raidFailed;
     private readonly Counter<long> _tickExceptions;
+    private readonly Counter<long> _playerConnected;
+    private readonly Counter<long> _playerDisconnected;
+    private readonly Counter<long> _playerConnectionErrors;
 
     // Gauge<double>: .NET 9+ push 게이지. ObservableGauge(콜백 pull)와 달리, 보스 HP를 유일하게
     // 읽는 레이드 액터 스레드가 그 시점 값을 직접 Record한다(폴링 타이밍 불일치 없음).
@@ -42,6 +45,9 @@ public sealed class GameMetrics : IDisposable
         _raidFailed = _meter.CreateCounter<long>("game.raid.failed", "events");
         _tickExceptions = _meter.CreateCounter<long>("game.tick.exceptions", "events");
         _raidBossHpPercent = _meter.CreateGauge<double>("game.raid.boss_hp_percent", "%");
+        _playerConnected = _meter.CreateCounter<long>("game.player.connected", "events");
+        _playerDisconnected = _meter.CreateCounter<long>("game.player.disconnected", "events");
+        _playerConnectionErrors = _meter.CreateCounter<long>("game.player.connection_errors", "events");
     }
 
     /// <summary>몬스터 처치 이벤트 1건을 카운트한다.</summary>
@@ -61,6 +67,15 @@ public sealed class GameMetrics : IDisposable
 
     /// <summary>레이드 보스의 현재 HP 비율(0~100)을 게이지에 기록한다.</summary>
     public void RaidBossHpPercent(double percent) => _raidBossHpPercent.Record(percent);
+
+    /// <summary>소켓 연결(임시 플레이어 배정) 이벤트 1건을 카운트한다.</summary>
+    public void PlayerConnected() => _playerConnected.Add(1);
+
+    /// <summary>소켓 연결 해제 이벤트 1건을 카운트한다.</summary>
+    public void PlayerDisconnected() => _playerDisconnected.Add(1);
+
+    /// <summary>연결 중 발생한 오류(OnClientError) 이벤트 1건을 카운트한다.</summary>
+    public void PlayerConnectionError() => _playerConnectionErrors.Add(1);
 
     /// <summary>내부 Meter를 해제한다.</summary>
     public void Dispose() => _meter.Dispose();

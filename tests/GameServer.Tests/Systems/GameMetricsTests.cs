@@ -35,6 +35,9 @@ public class GameMetricsTests
         metrics.RaidFailed();
         metrics.TickException();
         metrics.RaidBossHpPercent(42.5);
+        metrics.PlayerConnected();
+        metrics.PlayerDisconnected();
+        metrics.PlayerConnectionError();
 
         Assert.Equal(1, counters["game.monster.defeated"]);
         Assert.Equal(1, counters["game.player.defeated"]);
@@ -42,5 +45,8 @@ public class GameMetricsTests
         Assert.Equal(1, counters["game.raid.failed"]);
         Assert.Equal(1, counters["game.tick.exceptions"]);
         Assert.Equal(42.5, gaugeValue);
+        Assert.Equal(1, counters["game.player.connected"]);
+        Assert.Equal(1, counters["game.player.disconnected"]);
+        Assert.Equal(1, counters["game.player.connection_errors"]);
     }
 }
