@@ -80,6 +80,19 @@
 함께 건드려야 하는 사이클 밖 범위라 판단했다. 두 항목 모두
 `docs/code-reviews/2026-07-08-shared-boss-raid-coop-review.md`에 미해결로 남아 있다.
 
+### Low 발견 후속 수정 — 2026-07-09
+
+Low 발견 12건 중 값싸고 안전한 6건을 함께 정리했다: `RaidBroadcaster`의 `ArrayPool.Rent` 인라인
+주석 추가, `SessionRaidRunner`/`SessionBattleRunner`의 시작 장비 착용 중복을 `StarterGearEquipper`
+공용 헬퍼로 추출, `RaidEncounter.RunAsync`의 `Emit`+`onStep` 중복 블록을 `EmitAndBroadcastAsync`
+로컬 함수로 통합, 테스트의 `MakeBoss` 헬퍼 중복을 `RaidTestBoss`로 추출, `RaidStepBroadcast` 생성을
+전체 named 인자로 전환, 낡은 `onStep` XML 문서(이미 해소된 v1 한계를 아직 미해결처럼 서술) 정정.
+나머지 6건(`_boss` 이중 소유·판정 코어 상태 혼입·구체 클래스 DIP·연결 상한 없음·생성자 파라미터
+7개)은 실제 설계 트레이드오프이거나 비용 대비 낮은 가치로 판단해 보류했고, 보스 HP 게이지가
+브로드캐스트 스로틀을 우회하는 것은 의도된 동작(무조건적 liveness 신호, 회귀 테스트가 이 특성에
+의존)이라 명시적으로 반려했다. 상세 근거는
+`docs/code-reviews/2026-07-08-shared-boss-raid-coop-review.md`의 Low 섹션 각 항목 참고.
+
 ## 3. 컴포넌트 구조
 
 ```
@@ -93,7 +106,8 @@ GameServer/
 │  ├─ RaidRewardApplier.cs          (신규, 2026-07-09 SRP 분리 — 보상 라우팅(드레인 루프) + ApplyPending 정적 헬퍼)
 │  ├─ SessionRaidRunner.cs          (신규 — SessionPlayerBinder와 나란히 ISession을 다루는 네트워크 계층,
 │  │                                  2026-07-09부터 세션 생명주기·제출 루프 오케스트레이션만 담당)
-│  └─ SessionBattleRunner.cs        (수정 없음 — git 이력에 보존, 이 서버 경로에서는 배선하지 않음)
+│  ├─ StarterGearEquipper.cs        (신규, 2026-07-09 — SessionRaidRunner/SessionBattleRunner 공용 시작 장비 착용 헬퍼)
+│  └─ SessionBattleRunner.cs        (수정, 2026-07-09 — EquipStarterGear 제거, StarterGearEquipper 사용으로 교체)
 └─ (Entities/Items/Combat/Stats/기타 Systems — 변경 없음)
 
 tests/GameServer.Tests/Systems/
@@ -105,7 +119,8 @@ tests/GameServer.Tests/Systems/
 ├─ SessionRaidRunnerBroadcastDecouplingTests.cs  (신규, 2026-07-08 HIGH 수정 — 액터-전송 분리 회귀 검증)
 ├─ RaidBroadcasterTests.cs                       (신규, 2026-07-09 SRP 분리 — HP 스로틀 경계 검증)
 ├─ RaidRewardApplierTests.cs                     (신규, 2026-07-09 SRP 분리 — 라우팅/드롭/적용 검증)
-└─ SessionRaidRunnerEdgeCaseTests.cs             (신규, 2026-07-09 — 방어적 분기 회귀 검증)
+├─ SessionRaidRunnerEdgeCaseTests.cs             (신규, 2026-07-09 — 방어적 분기 회귀 검증)
+└─ RaidTestBoss.cs                               (신규, 2026-07-09 Low 정리 — MakeBoss 헬퍼 중복 제거)
 ```
 
 의존 관계:
@@ -171,6 +186,8 @@ listener.OnClientDisconnected = async session =>
 | `tests/GameServer.Tests/Systems/RaidBroadcasterTests.cs` | 신규(2026-07-09) | HP 스로틀 경계, BossDefeated는 스로틀 무관 즉시 전송 |
 | `tests/GameServer.Tests/Systems/RaidRewardApplierTests.cs` | 신규(2026-07-09) | 라우팅/미등록 드롭/Unregister 이후 차단/ApplyPending |
 | `tests/GameServer.Tests/Systems/SessionRaidRunnerEdgeCaseTests.cs` | 신규(2026-07-09) | Player 컨텍스트 없음/중복 SessionId/중복 해제 방어적 분기 |
+| `GameServer/Systems/StarterGearEquipper.cs` | 신규(2026-07-09) | Low 정리 — 시작 장비 착용 로직 공용 헬퍼(SessionRaidRunner/SessionBattleRunner 중복 제거) |
+| `tests/GameServer.Tests/Systems/RaidTestBoss.cs` | 신규(2026-07-09) | Low 정리 — `MakeBoss` 테스트 헬퍼 중복 제거 |
 
 ## 6. 빌드 검증
 
@@ -200,6 +217,7 @@ dotnet test tests/EchoExample.Tests/EchoExample.Tests.csproj
 
 - ~~브로드캐스트를 액터 루프에서 분리~~ — **완료(2026-07-08 코드리뷰 후속 수정, §2 참고).**
 - ~~SessionRaidRunner의 SRP 위반 해소~~ — **완료(2026-07-09 코드리뷰 후속 수정, §2 참고).**
+- ~~Low 발견 중 값싸고 안전한 6건 정리~~ — **완료(2026-07-09, §2 참고).**
 - (보류) `Systems/` 폴더를 Domain/Net으로 물리적으로 분리 — 평평한 컨벤션을 바꾸는 결정이라 사용자 확인 후 착수.
 - (보류) `MobHpPacket`/`MobDeathPacket`을 `ServerLib`에서 `GameServer.Net.Packets`로 이관 — 사이클 1의
   `SessionBattlePackets`/테스트까지 함께 건드려야 하는 벤더 라이브러리 수정, 별도 사이클로 분리 권장.

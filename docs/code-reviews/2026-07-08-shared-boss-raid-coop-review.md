@@ -91,17 +91,29 @@
 ## Low / 정보성 ← 검토 권장
 
 - [아키텍처] `SessionRaidRunner.cs:66-123` — `_boss` 필드가 `RaidEncounter`의 보스 캡슐화를 의도적으로 무력화(공유 가변 상태 이중 소유, 향후 보스 페이즈 도입 시 데이터 레이스 위험).
+  **보류(2026-07-09):** `SubmitLoopAsync`가 피해 계산에 boss의 불변 필드를 읽어야 하는 실제 설계 트레이드오프 — `RaidEncounter`가 피해 계산 자체를 흡수하는 재설계가 필요해 Low 심각도 대비 비용이 큼.
 - [아키텍처] `RaidEncounter.cs:290-360` — 순수 판정 코어에 `_generation`/`_lastMvpName` 등 브로드캐스트 투영 상태가 혼입(현재는 테스트로 방어됨).
+  **보류(2026-07-09):** 위와 동일한 이유로 수용된 트레이드오프, 테스트로 이미 방어됨.
 - [아키텍처] `SessionRaidRunner.cs:174-181` — `EquipStarterGear`가 `SessionBattleRunner`와 verbatim 중복(DRY 위반, 시작 장비 ID 4001/5001/6001 중복).
+  **해소됨(2026-07-09):** 두 클래스 공용 `StarterGearEquipper` 정적 헬퍼로 추출.
 - [아키텍처] `SessionRaidRunner.cs:104-124,203` — 구체 `RaidEncounter` 생성 + `BattleManager` 싱글턴 정적 접근(DIP, 테스트/확장성 저해).
+  **보류(2026-07-09):** 팩토리/인터페이스 주입으로의 재설계가 필요해 Low 심각도 대비 비용이 큼.
 - [아키텍처] `RaidEncounter.cs:437-462` — 액터가 `onStep`을 동기 await(설계 경계는 DIP상 올바름, 런타임 결합은 성능 도메인에서 HIGH로 별도 집계).
+  **해소됨(2026-07-08, HIGH 수정과 동일 원인):** 프로덕션 `onStep` 구현(`RaidBroadcaster.OnStepAsync`)이 트리비얼 패스스루로 바뀌어 이 동기 await 자체가 더 이상 실질적 결합을 만들지 않음. 관련 XML 문서(RunAsync의 onStep 파라미터)도 낡은 서술을 2026-07-09에 정정.
 - [보안] `SessionRaidRunner.cs:639-660` — 세션당 자원(CTS/Task/딕셔너리 엔트리)에 연결 수 상한 없음(CWE-770, 현재 루프백 한정이라 low).
+  **보류(2026-07-09):** 연결 제한 기능 추가가 필요해 실제 로그인 도입 사이클과 함께 다루는 편이 적절.
 - [성능] `RaidEncounter.cs:461` — 보스 HP 게이지 메트릭이 브로드캐스트 스로틀을 우회해 매 요청마다 기록됨.
+  **반려(2026-07-09):** 의도된 설계 — 스로틀과 무관하게 매 스텝 액터 생존을 보여주는 무조건적 liveness 신호이며, `SessionRaidRunnerBroadcastDecouplingTests`가 정확히 이 특성(브로드캐스트 지연과 무관하게 게이지가 계속 기록됨)에 의존해 회귀를 검증한다.
 - [스타일] `SessionRaidRunner.cs:105` — 생성자 파라미터 7개, 파라미터 객체화 고려.
+  **보류(2026-07-09):** 호출 지점이 `Main.cs` 1곳뿐이라 파라미터 객체 도입이 순수 churn — CLAUDE.md의 YAGNI 원칙에 따라 미착수.
 - [스타일] `RaidEncounter.cs` RunAsync — `Emit`+`onStep` 호출 블록이 damageStep/deadlineStep 두 번 거의 동일하게 반복(지역 함수로 DRY 가능).
+  **해소됨(2026-07-09):** `EmitAndBroadcastAsync` 로컬 함수로 통합.
 - [스타일] `RaidEncounterBroadcastTests.cs`/`RaidEncounterConcurrencyTests.cs` — `MakeBoss` 테스트 헬퍼 중복.
+  **해소됨(2026-07-09):** 공용 `RaidTestBoss.Make` 헬퍼로 추출.
 - [스타일] `SessionRaidRunner.cs:280` — `ArrayPool.Rent` 선언 라인에 인라인 주석 누락(remarks로는 설명됨, 위치 규칙과 어긋남).
+  **해소됨(2026-07-09):** SRP 분리로 이동한 `RaidBroadcaster.BroadcastPacketAsync`의 해당 선언에 인라인 주석 추가.
 - [스타일] `RaidStepBroadcast` — 7-필드 위치 기반 record, 동일 타입 인접 필드로 인자 순서 혼동 위험(현재 일부만 named 인자 사용).
+  **해소됨(2026-07-09):** `RaidEncounter.BuildBroadcast`의 두 생성 지점 모두 전체 named 인자로 전환.
 
 ---
 
