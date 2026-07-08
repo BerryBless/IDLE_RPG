@@ -1,12 +1,7 @@
-using System.Buffers;
 using System.Collections.Concurrent;
-using System.Threading.Channels;
 using GameServer.Entities;
 using GameServer.Items;
 using ServerLib.Core;
-using ServerLib.Core.Memory;
-using ServerLib.Core.Serialization;
-using ServerLib.Core.Serialization.Packets;
 using ServerLib.Interface;
 
 namespace GameServer.Systems;
@@ -43,15 +38,18 @@ namespace GameServer.Systems;
 /// 단일 accept 루프 안에서 <c>OnClientConnected</c>를 직접 await하므로, <see cref="OnConnected"/>는
 /// 세션 제출 루프를 <c>Task.Run</c>으로 fire-and-forget 시작한다(사이클 1과 동일 근거).</description></item>
 /// <item><description><b>브로드캐스트는 액터 루프와 완전히 분리되어 있다(코드리뷰 HIGH 발견 수정,
-/// 2026-07-08):</b> <see cref="RaidEncounter.RunAsync"/>의 <c>onStep</c> 콜백(<see cref="BroadcastStepAsync"/>)은
-/// <see cref="_broadcastChannel"/>에 <c>TryWrite</c>만 하고 즉시 반환한다 — 실제
-/// <see cref="ISessionRegistry.BroadcastAsync"/> 네트워크 전송은 별도 드레인 태스크
-/// (<see cref="BroadcastDrainAsync"/>)가 전담한다. 이전에는 <c>onStep</c>이 브로드캐스트를 직접
-/// 동기 await해, 수신 버퍼를 비우지 않는 정지된 클라이언트 1명이 <c>SessionSendTimeout</c> 미설정
-/// 시 레이드 액터 전체를 무한 정지시키고 무경계 <c>_damageChannel</c>이 무한 증가하는 OOM 경로가
-/// 있었다(<c>docs/code-reviews/2026-07-08-shared-boss-raid-coop-review.md</c> HIGH 발견). 지금은
-/// 브로드캐스트가 아무리 느리거나 영원히 끝나지 않아도 액터의 피해 처리·기여도 집계·데드라인 판정은
-/// 전혀 영향받지 않는다.</description></item>
+/// 2026-07-08):</b> <see cref="RaidEncounter.RunAsync"/>의 <c>onStep</c> 콜백(<see cref="RaidBroadcaster.OnStepAsync"/>)은
+/// 내부 채널에 <c>TryWrite</c>만 하고 즉시 반환한다 — 실제 <see cref="ISessionRegistry.BroadcastAsync"/>
+/// 네트워크 전송은 <see cref="RaidBroadcaster"/>의 별도 드레인 태스크가 전담한다. 이전에는
+/// <c>onStep</c>이 브로드캐스트를 직접 동기 await해, 수신 버퍼를 비우지 않는 정지된 클라이언트 1명이
+/// <c>SessionSendTimeout</c> 미설정 시 레이드 액터 전체를 무한 정지시키고 무경계 <c>_damageChannel</c>이
+/// 무한 증가하는 OOM 경로가 있었다(<c>docs/code-reviews/2026-07-08-shared-boss-raid-coop-review.md</c>
+/// HIGH 발견). 지금은 브로드캐스트가 아무리 느리거나 영원히 끝나지 않아도 액터의 피해 처리·기여도
+/// 집계·데드라인 판정은 전혀 영향받지 않는다.</description></item>
+/// <item><description><b>SRP 분리(코드리뷰 Medium 발견 수정, 2026-07-09):</b> 브로드캐스트 직렬화/
+/// 스로틀/전송 책임은 <see cref="RaidBroadcaster"/>로, 보상 라우팅 책임은 <see cref="RaidRewardApplier"/>로
+/// 분리했다. 이 클래스는 세션 생명주기(접속/해제 등록)와 세션별 제출 루프 오케스트레이션만
+/// 담당한다.</description></item>
 /// </list>
 /// </remarks>
 public sealed class SessionRaidRunner
@@ -64,46 +62,18 @@ public sealed class SessionRaidRunner
     /// <summary><see cref="SubmitLoopAsync"/>가 <c>tickInterval</c>을 지정하지 않으면 사용하는 기본 간격.</summary>
     private static readonly TimeSpan DefaultTickInterval = TimeSpan.FromMilliseconds(500);
 
-    // HP 브로드캐스트 스로틀: BossDamaged/None 스텝은 이 간격보다 자주 전 세션에 보내지 않는다(N명
-    // 접속 시 매 피해 제출마다 브로드캐스트하면 틱당 N×N 전송이 되는 것을 방지). 처치/실패는 항상
-    // 즉시 보낸다(BroadcastStepAsync에서 이벤트 종류로 분기).
-    private static readonly TimeSpan HpBroadcastThrottle = TimeSpan.FromMilliseconds(150);
-
     private readonly PlayerLevelSystem _levelSystem;
     private readonly EquipmentTable _equipmentTable;
     private readonly GameEventSink _sink;
-    private readonly ISessionRegistry _registry;
     private readonly TimeSpan? _tickInterval;
     private readonly Monster _boss;
     private readonly RaidEncounter _raid;
-
-    // BinaryPacketSerializer: 무상태(내부 가변 필드 없음)라 여러 세션 제출 루프/액터 콜백이 동시에
-    // 호출해도 안전 — PacketSendExtensions와 동일하게 인스턴스 1개를 공유한다(직렬화기 재할당 방지).
-    private readonly BinaryPacketSerializer _serializer = new();
+    private readonly RaidBroadcaster _broadcaster;
+    private readonly RaidRewardApplier _rewardApplier;
 
     // ConcurrentDictionary<Guid, ...>: 세션 접속/해제가 여러 I/O 스레드에서 동시에 일어나므로 락 없는
     // 딕셔너리로 세션별 컨텍스트를 관리한다(사이클 1 SessionBattleRunner와 동일 근거).
     private readonly ConcurrentDictionary<Guid, SessionRaidContext> _bySessionId = new();
-
-    // ConcurrentDictionary<string, ...>: 드레인 루프가 보상 grant의 PlayerInstanceId로 세션 컨텍스트를
-    // 찾아야 하므로 InstanceId를 보조 키로 둔 두 번째 인덱스 — 세션이 하나뿐이라 SessionId 딕셔너리와
-    // 항상 1:1로 동기화된다(OnConnected/OnDisconnected에서 두 딕셔너리를 함께 갱신).
-    private readonly ConcurrentDictionary<string, SessionRaidContext> _byInstanceId = new();
-
-    // Channel<RaidStepBroadcast>: 액터(생산자, onStep 콜백을 통해)→브로드캐스트 드레인 태스크(단일
-    // 소비자) 큐. 액터는 여기 TryWrite만 하고 실제 네트워크 브로드캐스트(느리거나 영원히 끝나지 않을
-    // 수 있음)를 전혀 기다리지 않는다 — 코드리뷰 HIGH 발견(느린/정지된 클라이언트가 액터를 무한
-    // 정지시켜 무경계 _damageChannel이 무한 증가하는 OOM 경로) 수정: 브로드캐스트를 액터 루프에서
-    // 완전히 분리한다. SingleWriter=true(onStep은 액터의 단일 스레드에서만 순차 호출),
-    // SingleReader=true(드레인 태스크 1개). Unbounded — 원소가 작은 값 타입 struct라 소비가 밀려도
-    // 액터 자체의 가용성에는 영향이 없다(액터는 이 채널에 절대 TryRead/await하지 않음).
-    private readonly Channel<RaidStepBroadcast> _broadcastChannel = Channel.CreateUnbounded<RaidStepBroadcast>(
-        new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
-
-    // DateTime(브로드캐스트 드레인 태스크 전용 필드): BroadcastDrainAsync는 단일 소비자이므로 이
-    // 필드의 유일한 리더/라이터다(락 불필요) — 코드리뷰 HIGH 수정으로 액터 스레드에서 이 드레인
-    // 태스크로 소유권이 이관됐다.
-    private DateTime _lastHpBroadcastUtc = DateTime.MinValue;
 
     private sealed class SessionRaidContext
     {
@@ -135,8 +105,9 @@ public sealed class SessionRaidRunner
         _levelSystem = levelSystem;
         _equipmentTable = equipmentTable;
         _sink = sink;
-        _registry = registry;
         _tickInterval = tickInterval;
+        _broadcaster = new RaidBroadcaster(registry);
+        _rewardApplier = new RaidRewardApplier();
 
         // _boss를 별도 필드로 보관 — RaidEncounter는 boss 참조를 캡슐화(private)하므로, 세션 제출
         // 루프가 CalcFinalDamage(player, boss)로 피해를 계산하려면 이 클래스가 같은 인스턴스를
@@ -153,9 +124,9 @@ public sealed class SessionRaidRunner
     /// </remarks>
     public void Start(CancellationToken lifetimeToken)
     {
-        _ = Task.Run(() => _raid.RunAsync(_sink, lifetimeToken, BroadcastStepAsync), lifetimeToken);
-        _ = Task.Run(() => DrainRewardsAsync(lifetimeToken), lifetimeToken);
-        _ = Task.Run(() => BroadcastDrainAsync(lifetimeToken), lifetimeToken);
+        _ = Task.Run(() => _raid.RunAsync(_sink, lifetimeToken, _broadcaster.OnStepAsync), lifetimeToken);
+        _ = Task.Run(() => _rewardApplier.DrainAsync(_raid.RewardReader, lifetimeToken), lifetimeToken);
+        _ = Task.Run(() => _broadcaster.DrainAsync(lifetimeToken), lifetimeToken);
     }
 
     /// <summary>접속 시 시작 장비를 착용시키고 이 세션의 보스 공격 제출 루프를 시작한다.</summary>
@@ -188,7 +159,7 @@ public sealed class SessionRaidRunner
             ctx.Cts.Dispose(); // TryAdd 실패(중복 SessionId) — 아직 아무도 안 쓴 CTS라 즉시 dispose 안전
             return ValueTask.CompletedTask;
         }
-        _byInstanceId[player.InstanceId] = ctx;
+        _rewardApplier.Register(player.InstanceId, ctx.PendingRewards);
 
         // Task.Run(fire-and-forget): accept 루프 블로킹 금지(위 클래스 remarks 참고).
         _ = Task.Run(() => SubmitLoopAsync(ctx));
@@ -212,7 +183,7 @@ public sealed class SessionRaidRunner
         if (_bySessionId.TryRemove(session.SessionId, out var ctx))
         {
             ctx.Cts.Cancel(); // Dispose는 하지 않는다 — 위 클래스 remarks의 "세션 CTS는 링크하지 않는다" 참고
-            _byInstanceId.TryRemove(ctx.Player.InstanceId, out _);
+            _rewardApplier.Unregister(ctx.Player.InstanceId);
         }
 
         return ValueTask.CompletedTask;
@@ -249,12 +220,7 @@ public sealed class SessionRaidRunner
             while (true)
             {
                 // 드레인 루프가 큐에 넣어둔 보상을 이 세션(=이 Player의 유일한 소유 스레드)에서만 적용.
-                while (ctx.PendingRewards.TryDequeue(out var grant))
-                {
-                    ctx.Player.AddExp(grant.Exp);
-                    ctx.Player.AddGold(grant.Gold);
-                    _levelSystem.CheckLevelUp(ctx.Player);
-                }
+                RaidRewardApplier.ApplyPending(ctx.Player, ctx.PendingRewards, _levelSystem);
 
                 var damage = BattleManager.Instance.CalcFinalDamage(ctx.Player, _boss);
                 _raid.SubmitDamage(ctx.Player.InstanceId, damage);
@@ -272,110 +238,4 @@ public sealed class SessionRaidRunner
         }
     }
 
-    /// <summary>보스 처치로 발생한 보상 grant를 InstanceId로 해당 세션 큐에 라우팅하는 단일 드레인 루프.</summary>
-    /// <remarks>
-    /// Player를 절대 직접 만지지 않는다(단일 소유 원칙, 클래스 remarks 참고) — 찾은 세션의
-    /// <see cref="ConcurrentQueue{T}"/>에 enqueue만 한다. <see cref="_byInstanceId"/>에서 못 찾으면
-    /// (이미 접속 종료한 임시 플레이어) grant를 드롭한다 — 영속화가 없는 임시 Player라 무해한 no-op이다.
-    /// </remarks>
-    private async Task DrainRewardsAsync(CancellationToken lifetimeToken)
-    {
-        try
-        {
-            await foreach (var grant in _raid.RewardReader.ReadAllAsync(lifetimeToken))
-            {
-                if (_byInstanceId.TryGetValue(grant.PlayerInstanceId, out var ctx))
-                {
-                    ctx.PendingRewards.Enqueue(grant);
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // 정상 종료(서버 수명 토큰 취소).
-        }
-    }
-
-    /// <summary>
-    /// <see cref="RaidEncounter.RunAsync"/>의 onStep 콜백. <see cref="_broadcastChannel"/>에
-    /// <c>TryWrite</c>만 하고 즉시 반환한다 — 실제 네트워크 전송·스로틀 판정은 전혀 하지 않는다.
-    /// </summary>
-    /// <remarks>
-    /// <b>Blocking 여부:</b> Non-blocking, 동기 반환(async 상태 머신조차 없음). 무경계 채널의
-    /// <c>TryWrite</c>는 항상 즉시 성공한다. <b>코드리뷰 HIGH 발견 수정:</b> 이전에는 여기서
-    /// <c>registry.BroadcastAsync</c>를 직접 동기 await해, 정지된 클라이언트 1명이 레이드 액터
-    /// 전체를 무한 정지시킬 수 있었다(클래스 remarks 참고). 실제 전송·스로틀은
-    /// <see cref="BroadcastDrainAsync"/>가 별도 태스크에서 전담한다.
-    /// </remarks>
-    private ValueTask BroadcastStepAsync(RaidStepBroadcast info, CancellationToken cancellationToken)
-    {
-        _broadcastChannel.Writer.TryWrite(info);
-        return ValueTask.CompletedTask;
-    }
-
-    /// <summary>
-    /// <see cref="_broadcastChannel"/>을 소비하며 실제 네트워크 브로드캐스트와 HP 스로틀 판정을
-    /// 전담하는 단일 드레인 태스크. 레이드 액터 루프와 완전히 분리되어 있어, 느리거나 영원히
-    /// 끝나지 않는 전송이 있어도 액터의 피해 처리·기여도 집계·데드라인 판정에는 전혀 영향이 없다.
-    /// </summary>
-    /// <remarks>
-    /// <b>Blocking 여부:</b> Non-blocking. <c>ReadAllAsync</c>와 실제 브로드캐스트 <c>await</c>에서만
-    /// 대기하며 호출 스레드를 점유하지 않는다. <b>Thread Safety:</b> 이 태스크가
-    /// <see cref="_lastHpBroadcastUtc"/>의 유일한 리더/라이터다(단일 소비자, 락 불필요).
-    /// <b>코드리뷰 Medium 발견 수정:</b> 스로틀 타임스탬프를 브로드캐스트 <c>await</c> 완료
-    /// <b>이후</b>에 찍는다 — 이전에는 await 이전에 찍어, 브로드캐스트 1회가
-    /// <see cref="HpBroadcastThrottle"/>(150ms)를 넘으면 다음 스텝이 항상 "이미 경과함"으로 판정돼
-    /// 스로틀이 사실상 무력화됐다(보호가 가장 필요한 느린 구간에서 정확히 보호가 사라지는 버그).
-    /// </remarks>
-    private async Task BroadcastDrainAsync(CancellationToken lifetimeToken)
-    {
-        try
-        {
-            await foreach (var info in _broadcastChannel.Reader.ReadAllAsync(lifetimeToken))
-            {
-                bool isThrottledHpOnly = info.Event is RaidEventType.None or RaidEventType.BossDamaged;
-                if (isThrottledHpOnly && DateTime.UtcNow - _lastHpBroadcastUtc < HpBroadcastThrottle)
-                {
-                    continue; // 스로틀 — 이번 HP 브로드캐스트는 건너뛴다(보스 판정 자체는 이미 끝난 뒤라 영향 없음)
-                }
-
-                var (death, hp) = RaidBroadcastPackets.Build(info);
-                if (death is not null)
-                {
-                    await BroadcastPacketAsync(death, lifetimeToken);
-                }
-                await BroadcastPacketAsync(hp, lifetimeToken);
-
-                if (isThrottledHpOnly)
-                {
-                    _lastHpBroadcastUtc = DateTime.UtcNow; // await 완료 후 갱신 — 위 remarks 참고
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // 정상 종료(서버 수명 토큰 취소).
-        }
-    }
-
-    /// <summary>패킷 1개를 직렬화해 접속한 모든 세션에 브로드캐스트한다.</summary>
-    /// <remarks>
-    /// <b>Memory Allocation:</b> <see cref="ArrayPool{T}"/>.Shared에서 버퍼를 대여해 직렬화하고,
-    /// <see cref="ISessionRegistry.BroadcastAsync"/>가 요구하는 대로 그 <c>ValueTask</c>가 완료될
-    /// 때까지(모든 세션 전송 완료) 버퍼를 유효하게 유지한 뒤 <c>finally</c>에서 반납한다 —
-    /// <see cref="PacketSendExtensions.SendAsync{T}(ISession, T, CancellationToken)"/>와 동일한 패턴.
-    /// </remarks>
-    private async ValueTask BroadcastPacketAsync<T>(T packet, CancellationToken cancellationToken) where T : IPacket
-    {
-        var buffer = ArrayPool<byte>.Shared.Rent(PacketPool.HeaderSize + packet.GetBodySize());
-        try
-        {
-            int written = _serializer.Serialize(packet, buffer);
-            await _registry.BroadcastAsync(buffer.AsMemory(0, written), cancellationToken);
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(buffer);
-        }
-    }
 }
