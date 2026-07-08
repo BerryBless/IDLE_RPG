@@ -45,4 +45,32 @@ public static class PlayerFactory
 
         return player;
     }
+
+    /// <summary>
+    /// 로그인 없이 소켓 연결 시점에 즉시 배정할 임시 플레이어를 생성한다.
+    /// </summary>
+    /// <param name="sessionId">연결을 식별하는 세션 ID. <see cref="Create"/>의 <c>instanceId</c>로 변환된다.</param>
+    /// <param name="levelSystem">레벨 스탯 적용에 사용할 시스템</param>
+    /// <returns>레벨 1, 계정 미지정(0) 상태로 즉시 전투 투입 가능한 임시 <see cref="Player"/></returns>
+    /// <exception cref="ArgumentNullException"><paramref name="levelSystem"/>이 null인 경우</exception>
+    /// <remarks>
+    /// <b>왜 <see cref="ISession"/>이 아니라 <see cref="Guid"/>를 받는가:</b> 이 팩토리가 ServerLib의
+    /// <c>ISession</c> 타입을 직접 참조하면 GameServer의 순수 도메인 계층이 네트워크 계층에 의존하게
+    /// 되어, 소켓 없이도 가능해야 할 단위 테스트가 ServerLib를 끌어와야 하는 상황이 된다. 호출부
+    /// (연결 콜백)에서 <c>session.SessionId</c>(Guid)만 넘기면 되므로, 이 메서드는 ServerLib를
+    /// 전혀 모르는 채로 순수 함수로 남는다.
+    /// <b>AccountId=0:</b> 실 계정이 연결되지 않은 임시 플레이어의 플레이스홀더 값이다. 로그인이
+    /// 구현되면 인증된 실제 계정 ID로 교체된다.
+    /// <b>Thread Safety / Memory Allocation / Blocking:</b> <see cref="Create"/>와 동일 —
+    /// 공유 상태 없이 완전히 독립된 새 인스턴스를 동기·비차단으로 반환한다.
+    /// </remarks>
+    public static Player CreateTemp(Guid sessionId, PlayerLevelSystem levelSystem)
+    {
+        ArgumentNullException.ThrowIfNull(levelSystem);
+
+        // "N" 포맷(하이픈 없는 32자리 16진수): 세션마다 고유한 Guid이므로 로그인 없이도
+        // 충돌 없는 InstanceId를 얻는다. 계정 미지정(0)·레벨 1 고정은 "임시 플레이어" 정책.
+        var instanceId = $"player-{sessionId:N}";
+        return Create(instanceId, accountId: 0, level: 1, levelSystem);
+    }
 }
