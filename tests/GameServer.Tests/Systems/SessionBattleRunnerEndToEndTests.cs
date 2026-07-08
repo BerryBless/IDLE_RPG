@@ -141,4 +141,95 @@ public class SessionBattleRunnerEndToEndTests
             listener.Stop();
         }
     }
+
+    /// <summary>
+    /// "전투를 멀티로"의 핵심 주장 — 동시 접속한 각 세션이 서로 독립된 몬스터를 사냥한다는 것 —
+    /// 을 실제로 검증한다. 위 테스트를 포함해 이제까지의 모든 통합 검증은 클라이언트 1개뿐이라
+    /// <c>SessionBattleRunner</c> 내부 <c>_battles</c> 딕셔너리 키잉과 세션별 Player/Monster 격리가
+    /// N=1에서만 확인된 상태였다. 여기서는 동시에 소켓 2개를 연결해, 각자 받은
+    /// <see cref="MobDeathPacket.MvpName"/>이 서로 다른(교차 오염 없는) 자기 자신의
+    /// <c>player.InstanceId</c>인지 확인한다.
+    /// </summary>
+    [Fact]
+    public async Task TwoConcurrentConnections_EachReceivesOwnDistinctMvpName()
+    {
+        const int TimeoutMs = 5_000;
+
+        var meterName = $"Test.SessionBattleRunner.{Guid.NewGuid()}";
+        var metrics = new GameMetrics(meterName);
+        await using var sink = new GameEventSink(new StringWriter(), metrics);
+
+        var levelSystem = PlayerLevelSystem.CreateDefault();
+        var binder = new SessionPlayerBinder(levelSystem, sink);
+        var battleRunner = new SessionBattleRunner(
+            levelSystem, MonsterTable.CreateDefault(), BuildOneShotEquipmentTable(), sink,
+            tickInterval: TimeSpan.FromMilliseconds(5));
+
+        var serializer = new BinaryPacketSerializer();
+
+        int port = GetFreePort();
+        IServerListener listener = ServerNet.CreateListener();
+
+        listener.OnClientConnected = async session =>
+        {
+            await binder.OnConnected(session);
+            await battleRunner.OnConnected(session);
+        };
+        listener.OnClientDisconnected = async session =>
+        {
+            await battleRunner.OnDisconnected(session);
+            await binder.OnDisconnected(session);
+        };
+        listener.OnClientError = binder.OnError;
+
+        listener.Start(port, IPAddress.Loopback);
+
+        try
+        {
+            // 두 클라이언트를 동시에 연결한다 — 서로 다른 SessionId로 SessionBattleRunner._battles에
+            // 각각 등록되어야 격리가 성립한다(같은 딕셔너리, 다른 키).
+            var deathA = new TaskCompletionSource<MobDeathPacket>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var deathB = new TaskCompletionSource<MobDeathPacket>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var clientA = ServerNet.CreateClient();
+            clientA.OnReceived = data =>
+            {
+                ushort packetId = BinaryPrimitives.ReadUInt16LittleEndian(data.Span);
+                if (packetId == MobDeathPacket.Id)
+                {
+                    deathA.TrySetResult(serializer.Deserialize<MobDeathPacket>(data.Span));
+                }
+                return ValueTask.CompletedTask;
+            };
+
+            var clientB = ServerNet.CreateClient();
+            clientB.OnReceived = data =>
+            {
+                ushort packetId = BinaryPrimitives.ReadUInt16LittleEndian(data.Span);
+                if (packetId == MobDeathPacket.Id)
+                {
+                    deathB.TrySetResult(serializer.Deserialize<MobDeathPacket>(data.Span));
+                }
+                return ValueTask.CompletedTask;
+            };
+
+            await Task.WhenAll(
+                clientA.ConnectAsync("127.0.0.1", port),
+                clientB.ConnectAsync("127.0.0.1", port));
+
+            var resultA = await deathA.Task.WaitAsync(TimeSpan.FromMilliseconds(TimeoutMs));
+            var resultB = await deathB.Task.WaitAsync(TimeSpan.FromMilliseconds(TimeoutMs));
+
+            Assert.StartsWith("player-", resultA.MvpName);
+            Assert.StartsWith("player-", resultB.MvpName);
+            Assert.NotEqual(resultA.MvpName, resultB.MvpName); // 세션별 독립 Player — 교차 오염 없음
+
+            await clientA.DisposeAsync();
+            await clientB.DisposeAsync();
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
 }
