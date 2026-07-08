@@ -15,10 +15,13 @@
 - `examples/EchoServer`: `ServerLib.ServerNet.CreateListener()`로 포트 9000 TCP 에코 서버를 띄우는 최소 예제. 실행: `dotnet run --project examples/EchoServer`.
 - `examples/EchoClient`: `ServerLib.ServerNet.CreateClient()`로 에코 서버에 접속해 콘솔 입력을 송수신하는 예제. 실행: `dotnet run --project examples/EchoClient`.
 - `GameServer`: 포트 7777에서 실제 TCP 클라이언트를 받는 게임 서버(`Main.cs`). 로그인은 아직 없음 —
-  소켓 연결 시 `SessionPlayerBinder`가 임시 `Player`를 생성해 `session.Context`에 부착하고,
-  해제 시 정리 이벤트를 `logs/game-events.ndjson`에 남긴다(전투 프로토콜은 다음 사이클). 실행:
-  `dotnet run --project GameServer`. 이전의 400명 스레드 샤딩 자동배틀 콘솔 데모는 제거됨(git 이력에
-  보존, `Systems/BattleLoop.cs` 등 도메인 클래스와 단위 테스트는 그대로 유지).
+  소켓 연결 시 `SessionPlayerBinder`가 임시 `Player`를 생성해 `session.Context`에 부착한 뒤,
+  `SessionBattleRunner`가 고정 시작 몬스터(고블린 2003)·장비(4001/5001/6001)를 붙여 서버 자동 틱
+  (500ms)으로 전투를 시작한다. 클라이언트는 명령을 보내지 않고 `MobHpPacket`/`MobDeathPacket`을
+  그 세션에만 수신한다(세션마다 독립된 몬스터 — 공유 보스 co-op는 다음 사이클). 해제 시 정리
+  이벤트를 `logs/game-events.ndjson`에 남긴다. 실행: `dotnet run --project GameServer`. 이전의
+  400명 스레드 샤딩 자동배틀 콘솔 데모는 제거됨(git 이력에 보존, `Systems/BattleLoop.cs` 등 도메인
+  클래스와 단위 테스트는 그대로 유지).
 
 새 기능을 추가할 때 Program.cs의 예제도 함께 업데이트할 것.
 
@@ -76,6 +79,7 @@ plan/<기능명>_<MMDD>.md
 | [battle_system_0705.md](plan/battle_system_0705.md) | 방치형 전투 플로우 설계(온라인 실시간 틱 + 오프라인 수식 하이브리드) 및 TDD 구현: 스탯 집계 파이프라인·버프·보상·오프라인 정산·코드리뷰 수정(F1~F11)·단일 Player vs Monster `BattleLoop` 무한 루프 완료(`GameServer.Tests` 63개), Stage/Wave/Spawner/스킬/부활코스트는 다음 사이클 |
 | [serverlib_echo_import_0708.md](plan/serverlib_echo_import_0708.md) | ClaudeCodeStudy `ServerLib`(고성능 소켓 서버 라이브러리) 소스 반입 설계. `ServerLib`는 루트 직속(GameServer와 동급), `EchoServer`/`EchoClient`는 `examples/`, 자동 테스트는 `tests/EchoExample.Tests`. 에코 왕복 스모크 테스트로 1차 검증, GameServer 통합은 다음 사이클 |
 | [client_server_split_0708.md](plan/client_server_split_0708.md) | 클라-서버 분리 1단계: GameServer의 400명 스레드 샤딩 데모를 제거하고 `ServerNet` 기반 실제 TCP 서버(포트 7777)로 교체. 로그인 생략, 소켓 연결마다 `SessionPlayerBinder`가 임시 `Player`를 생성해 `session.Context`에 부착. 실소켓 통합 테스트로 연결→해제 사이클 검증, 게임플레이 프로토콜(OnReceived)과 실제 로그인은 다음 사이클 |
+| [battle_multiplayer_0708.md](plan/battle_multiplayer_0708.md) | 전투 멀티플레이 1단계: 접속한 각 세션이 서버 자동 틱(500ms)으로 독립 몬스터를 동시에 사냥, `MobHpPacket`/`MobDeathPacket`을 그 세션에만 푸시(`SessionBattleRunner` 신규, `BattleLoop.RunAsync`에 선택적 `onTick` 콜백 추가). 동시 2연결 세션별 격리 테스트 + 실소켓 스모크로 검증. 공유 보스 co-op·PvP·실로그인은 다음 사이클 |
 
 ---
 
