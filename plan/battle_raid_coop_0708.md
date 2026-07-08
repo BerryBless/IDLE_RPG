@@ -59,6 +59,27 @@
 — 브로드캐스트가 절대 반환하지 않는 가짜 레지스트리를 주입해도 액터가 계속 전진함을 게이지 기록
 횟수로 직접 검증한다.
 
+### Medium 발견 후속 수정 — 2026-07-09
+
+같은 코드 리뷰의 Medium 발견 6건 중 이번 사이클(공유 보스 co-op) 범위 안의 4건을 수정했다.
+- **성능:** `SessionRaidRunner.SubmitLoopAsync`의 매 틱 `Task.Delay(interval, token)`을
+  `PeriodicTimer` 재사용으로 교체(타이머 등록/해제 오버헤드 절감).
+- **스타일:** `OnConnected`/`OnDisconnected`에 CLAUDE.md 인터페이스 문서화 규칙에 따른
+  `<param>`/`<remarks>`(Thread Context/Blocking/Thread Safety) 추가, 방어적 분기(Player
+  컨텍스트 없음/중복 SessionId/중복 해제) 회귀 테스트 3건 추가.
+- **아키텍처(SRP 위반):** `SessionRaidRunner`가 안던 6가지 책임 중 브로드캐스트(직렬화/스로틀/
+  전송)를 `RaidBroadcaster`로, 보상 라우팅+적용을 `RaidRewardApplier`로 분리했다(§3/§5 갱신).
+  부수 효과로 `_byInstanceId` 중복 인덱스도 제거됨(`RaidRewardApplier`가 라우팅 등록을 전담).
+  분리된 두 클래스는 `ISession` 전체를 흉내 내지 않고도 독립적으로 단위 테스트할 수 있어
+  스로틀 경계·보상 드롭 분기 테스트도 함께 추가했다.
+
+나머지 아키텍처 Medium 2건(`Systems/` 폴더를 Domain/Net으로 물리적으로 분리, `MobHpPacket`/
+`MobDeathPacket`을 범용 `ServerLib`에서 `GameServer`로 이관)은 **의도적으로 보류**했다 — 사용자
+확인 결과 전자는 이번 사이클의 확립된 평평한 `Systems/` 컨벤션을 바꾸는 결정이라 가치 대비 시급성이
+낮고, 후자는 벤더 라이브러리(`ServerLib`)를 수정하고 사이클 1의 `SessionBattlePackets`와 그 테스트까지
+함께 건드려야 하는 사이클 밖 범위라 판단했다. 두 항목 모두
+`docs/code-reviews/2026-07-08-shared-boss-raid-coop-review.md`에 미해결로 남아 있다.
+
 ## 3. 컴포넌트 구조
 
 ```
@@ -68,7 +89,10 @@ GameServer/
 │  ├─ RaidEncounter.cs              (수정 — SingleWriter=false, onStep 콜백, RaidStepBroadcast 신설,
 │  │                                  private _generation/_lastMvpName/_lastTopDamage — 순수 코어 시그니처는 무변경)
 │  ├─ RaidBroadcastPackets.cs       (신규 — RaidStepBroadcast → MobHpPacket/MobDeathPacket 순수 매퍼)
-│  ├─ SessionRaidRunner.cs          (신규 — SessionPlayerBinder와 나란히 ISession을 다루는 네트워크 계층)
+│  ├─ RaidBroadcaster.cs            (신규, 2026-07-09 SRP 분리 — onStep 수신 + 채널 드레인 + 직렬화/스로틀/전송)
+│  ├─ RaidRewardApplier.cs          (신규, 2026-07-09 SRP 분리 — 보상 라우팅(드레인 루프) + ApplyPending 정적 헬퍼)
+│  ├─ SessionRaidRunner.cs          (신규 — SessionPlayerBinder와 나란히 ISession을 다루는 네트워크 계층,
+│  │                                  2026-07-09부터 세션 생명주기·제출 루프 오케스트레이션만 담당)
 │  └─ SessionBattleRunner.cs        (수정 없음 — git 이력에 보존, 이 서버 경로에서는 배선하지 않음)
 └─ (Entities/Items/Combat/Stats/기타 Systems — 변경 없음)
 
@@ -77,7 +101,11 @@ tests/GameServer.Tests/Systems/
 ├─ RaidEncounterConcurrencyTests.cs              (신규 — 다중 라이터 동시 SubmitDamage 검증)
 ├─ RaidEncounterBroadcastTests.cs                (신규 — onStep MVP/세대 전환 시임 테스트)
 ├─ RaidBroadcastPacketsTests.cs                  (신규 — 순수 매퍼 단위 테스트)
-└─ SessionRaidRunnerEndToEndTests.cs             (신규 — 실 루프백 소켓 2연결 co-op 통합 테스트)
+├─ SessionRaidRunnerEndToEndTests.cs             (신규 — 실 루프백 소켓 2연결 co-op 통합 테스트)
+├─ SessionRaidRunnerBroadcastDecouplingTests.cs  (신규, 2026-07-08 HIGH 수정 — 액터-전송 분리 회귀 검증)
+├─ RaidBroadcasterTests.cs                       (신규, 2026-07-09 SRP 분리 — HP 스로틀 경계 검증)
+├─ RaidRewardApplierTests.cs                     (신규, 2026-07-09 SRP 분리 — 라우팅/드롭/적용 검증)
+└─ SessionRaidRunnerEdgeCaseTests.cs             (신규, 2026-07-09 — 방어적 분기 회귀 검증)
 ```
 
 의존 관계:
@@ -86,7 +114,11 @@ RaidEncounter (도메인) — ServerLib 비참조, onStep은 도메인 struct(Ra
    ↑
 RaidBroadcastPackets (도메인, 소켓 없는 순수 매퍼) — ServerLib 패킷 타입만 참조
    ↑
-SessionRaidRunner (네트워크 계층) — ISession/ISessionRegistry를 다루는 유일한 지점(SessionPlayerBinder와 나란히)
+RaidBroadcaster / RaidRewardApplier (네트워크 계층, 2026-07-09 분리) — 각각 ISessionRegistry
+로의 전송, PlayerInstanceId 라우팅만 안다
+   ↑
+SessionRaidRunner (네트워크 계층) — ISession을 다루는 유일한 지점(SessionPlayerBinder와 나란히),
+위 두 클래스를 조립해 세션 생명주기만 오케스트레이션
    ↑
 Main.cs — registry 생성 → CreateListener(registry) → raidRunner.Start(수명토큰)
 ```
@@ -128,11 +160,17 @@ listener.OnClientDisconnected = async session =>
 | `GameServer/Systems/RaidEncounter.cs` | 수정 | `_damageChannel` SingleWriter=false, `RunAsync`에 선택적 `onStep` 추가, `RaidStepBroadcast` 신설, private 세대/MVP 상태 추가(순수 코어 시그니처 무변경) |
 | `GameServer/Systems/RaidBroadcastPackets.cs` | 신규 | `RaidStepBroadcast` → `(MobDeathPacket?, MobHpPacket)` 순수 매퍼 |
 | `GameServer/Systems/SessionRaidRunner.cs` | 신규 | 공유 보스 co-op 네트워크 배선(제출 루프·드레인 루프·브로드캐스트) |
-| `GameServer/Main.cs` | 수정 | `SessionBattleRunner` 배선 제거, 세션 레지스트리 생성 + `SessionRaidRunner`로 교체 |
+| `GameServer/Main.cs` | 수정 | `SessionBattleRunner` 배선 제거, 세션 레지스트리 생성 + `SessionRaidRunner`로 교체, `listener.SessionSendTimeout` 설정 |
+| `GameServer/Systems/RaidBroadcaster.cs` | 신규(2026-07-09) | SRP 분리 — onStep 수신 + 채널 드레인 + 직렬화/스로틀/전송 |
+| `GameServer/Systems/RaidRewardApplier.cs` | 신규(2026-07-09) | SRP 분리 — 보상 라우팅(드레인 루프) + `ApplyPending` 정적 헬퍼 |
 | `tests/GameServer.Tests/Systems/RaidEncounterConcurrencyTests.cs` | 신규 | 다중 라이터 동시 제출 검증(유실/중복 없음) |
 | `tests/GameServer.Tests/Systems/RaidEncounterBroadcastTests.cs` | 신규 | onStep MVP/TopDamage/세대 전환 검증 |
 | `tests/GameServer.Tests/Systems/RaidBroadcastPacketsTests.cs` | 신규 | 순수 매퍼 단위 테스트 5건 |
 | `tests/GameServer.Tests/Systems/SessionRaidRunnerEndToEndTests.cs` | 신규 | 실 루프백 소켓 2연결 co-op 통합 테스트 |
+| `tests/GameServer.Tests/Systems/SessionRaidRunnerBroadcastDecouplingTests.cs` | 신규(2026-07-08) | HIGH 발견 회귀 — 브로드캐스트가 액터를 막지 않음을 검증 |
+| `tests/GameServer.Tests/Systems/RaidBroadcasterTests.cs` | 신규(2026-07-09) | HP 스로틀 경계, BossDefeated는 스로틀 무관 즉시 전송 |
+| `tests/GameServer.Tests/Systems/RaidRewardApplierTests.cs` | 신규(2026-07-09) | 라우팅/미등록 드롭/Unregister 이후 차단/ApplyPending |
+| `tests/GameServer.Tests/Systems/SessionRaidRunnerEdgeCaseTests.cs` | 신규(2026-07-09) | Player 컨텍스트 없음/중복 SessionId/중복 해제 방어적 분기 |
 
 ## 6. 빌드 검증
 
@@ -161,6 +199,10 @@ dotnet test tests/EchoExample.Tests/EchoExample.Tests.csproj
 ## 7. 향후 확장 포인트
 
 - ~~브로드캐스트를 액터 루프에서 분리~~ — **완료(2026-07-08 코드리뷰 후속 수정, §2 참고).**
+- ~~SessionRaidRunner의 SRP 위반 해소~~ — **완료(2026-07-09 코드리뷰 후속 수정, §2 참고).**
+- (보류) `Systems/` 폴더를 Domain/Net으로 물리적으로 분리 — 평평한 컨벤션을 바꾸는 결정이라 사용자 확인 후 착수.
+- (보류) `MobHpPacket`/`MobDeathPacket`을 `ServerLib`에서 `GameServer.Net.Packets`로 이관 — 사이클 1의
+  `SessionBattlePackets`/테스트까지 함께 건드려야 하는 벤더 라이브러리 수정, 별도 사이클로 분리 권장.
 - 브로드캐스트 스로틀 정교화(HP diff 임계·적응형 주기), 신규 접속자에게 현재 보스 HP 스냅샷 1회 즉시 푸시.
 - 보스 페이즈/버프(현재 불변식상 `boss.Update` 금지 — 페이즈 도입 시 액터 단일 스레드에서만 재계산하도록 재설계 필요).
 - 아이템 드롭 분배(현재 레이드는 Exp/Gold만 비례 분배, `AcquiredItems`는 미분배).

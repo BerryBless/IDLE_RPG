@@ -41,42 +41,50 @@
 **위치:** `GameServer/Systems/SessionRaidRunner.cs:754-767` (`BroadcastStepAsync`)
 **문제:** `_lastHpBroadcastUtc = now`를 `BroadcastAsync` await **이전**에 갱신한다. 브로드캐스트 1회가 150ms를 넘으면 다음 스텝의 `now - _lastHpBroadcastUtc`가 항상 창을 초과해 스로틀이 절대 억제하지 못하고 매 스텝이 실제 브로드캐스트를 강제당한다 — 보호가 가장 필요한(느린) 구간에서 정확히 보호가 사라지며 위 HIGH 발견의 큐 증가를 가속한다. 건강한 경우(브로드캐스트가 빠름)엔 설계 의도대로 2N²→~3N 억제가 유효함은 확인됨.
 **수정:** 타임스탬프를 `await` **완료 이후**에 찍도록 순서를 바꾼다. 근본적으로는 위 HIGH 발견의 브로드캐스트 분리를 적용하면 이 퇴화 자체가 사라진다.
+**해소됨(2026-07-08, HIGH 수정과 동시 적용):** `RaidBroadcaster.DrainAsync`(구 `BroadcastDrainAsync`)에서 `_lastHpBroadcastUtc` 갱신을 `await` 완료 이후로 이동.
 
 ### [성능] MEDIUM — 세션별 매 틱 `Task.Delay(interval, token)` 반복 할당
 **위치:** `GameServer/Systems/SessionRaidRunner.cs:690,706` (`SubmitLoopAsync`)
 **문제:** `while(true)` 안에서 매 틱 `Task.Delay`를 새로 호출해 Delay 프라미스 + 내부 Timer + `CancellationTokenRegistration`을 매번 할당한다. 세션 N개 × 500ms → 초당 ~2N건 Gen0 할당이 서버 수명 내내 지속되어, 이 코드베이스의 다른 핫 패스(ArrayPool/무할당 지향)와 어긋난다.
 **수정:** 세션당 `PeriodicTimer` 1개를 재사용(`await timer.WaitForNextTickAsync(ctx.Cts.Token)`)하도록 교체한다.
+**해소됨(2026-07-09):** `SubmitLoopAsync`가 루프 진입 전 `PeriodicTimer` 1개를 생성해 재사용하도록 교체.
 
 ### [보안] MEDIUM — 느린 클라이언트가 레이드 액터를 무한 정지 + 무경계 채널 메모리 고갈(DoS)
 **위치:** `GameServer/Main.cs:109`, `GameServer/Systems/SessionRaidRunner.cs:749-789`
 **CWE:** CWE-400
 **문제:** 위 성능 HIGH 발견과 동일 근본 원인을 보안 렌즈로 재확인. 리스너에 `SessionSendTimeout`/`IdleTimeout`을 설정하지 않아 ServerLib 기본값(무한 대기)이 적용된다. `SessionRegistry.BroadcastAsync`는 전 세션 전송 완료까지 await하며, 수신 버퍼를 비우지 않는 피어에 대해 `SendAsync`가 무한 블록된다(ServerLib 1차 소스 `SocketPipelineSession.cs:93-102`로 확인). `IdleTimeout`은 `LastReceivedAt`(수신 경로) 기반이라 읽기를 멈추고 하트비트만 보내는 피어는 스윕되지 않아 정지가 무한임을 확인. 현재 `IPAddress.Loopback` 한정이라 도달성이 로컬로 제한되어 medium 판정하나, **향후 외부 노출 시 원격 미인증 DoS로 즉시 상승**하는 시한폭탄이다.
 **수정:** `listener.SessionSendTimeout`을 유한값으로 설정(위 성능 발견의 완화책 2와 동일한 한 줄 수정으로 해결).
+**해소됨(2026-07-08, HIGH 수정과 동시 적용):** `Main.cs`에 `listener.SessionSendTimeout = TimeSpan.FromSeconds(2)` 추가.
 
 ### [아키텍처] MEDIUM — `SessionRaidRunner`의 SRP 위반(네트워크 계층이 도메인·보상·직렬화까지 전담)
 **위치:** `GameServer/Systems/SessionRaidRunner.cs:46-289`
 **문제:** 290줄 단일 클래스가 6가지 변경 이유(보스/인코운터 생성·소유, 장비 착용 도메인 로직, 세션 수명 관리, 피해계산/보상/레벨업, 보상 라우팅, 스로틀링/직렬화/브로드캐스트)를 겸한다.
 **수정:** 책임 축으로 분리 — 직렬화·스로틀·브로드캐스트를 담당하는 `RaidBroadcaster`, 보상 큐잉·적용을 담당하는 `RaidRewardApplier`, 세션 등록/해제·제출 루프 수명만 담당하는 얇은 `SessionRaidRunner`로 나눈다.
+**해소됨(2026-07-09):** 제안대로 `RaidBroadcaster`/`RaidRewardApplier`를 분리하고 `SessionRaidRunner`를 세션 생명주기·제출 루프 오케스트레이션만 남도록 축소(`plan/battle_raid_coop_0708.md` §2 참고). 부수 효과로 `_byInstanceId` 중복 인덱스(Low 발견)도 함께 제거됨.
 
 ### [아키텍처] MEDIUM — 도메인/매퍼/네트워크 계층이 물리적 분리 없이 한 폴더·네임스페이스에 공존
 **위치:** `RaidEncounter.cs`, `RaidBroadcastPackets.cs`, `SessionRaidRunner.cs`
 **문제:** 감사 요청의 핵심 질문(도메인이 ServerLib 네트워킹 타입을 참조하지 않는가)에 대한 결론 — `RaidEncounter.cs`는 완전히 준수(ServerLib 비참조, 검증 완료). 하지만 세 계층이 모두 `GameServer.Systems` 한 폴더에 섞여 있어 "RaidEncounter는 ServerLib를 참조하면 안 된다"는 규칙이 컴파일러가 아닌 주석·규율로만 강제된다.
 **수정:** 도메인(`Systems/Domain`)과 네트워크 배선(`Systems/Net`)을 폴더/프로젝트로 분리해 위반이 컴파일 에러로 드러나게 한다.
+**보류(2026-07-09, 사용자 확인):** 이번 사이클의 확립된 평평한 `Systems/` 컨벤션을 바꾸는 결정이라 가치 대비 시급성이 낮다고 판단해 미착수. `plan/battle_raid_coop_0708.md` §7에 향후 과제로 남김.
 
 ### [아키텍처] MEDIUM — 게임 전용 패킷이 범용 ServerLib에 위치(의존성 방향 역전, 선행 부채 확대)
 **위치:** `ServerLib/Core/Serialization/Packets/MobHpPacket.cs`, `MobDeathPacket.cs`
 **문제:** "몹 HP", "MVP/TopDamage" 같은 게임 도메인 개념이 재사용 가능한 범용 소켓 라이브러리에 정의돼 있다. 사이클 1의 선행 부채이지만, 이번 사이클의 `RaidBroadcastPackets`가 바로 이 타입에 결합하며 위 "계층 경계" 발견의 유일한 실제 위반 원인이 됐다.
 **수정:** `MobHpPacket`/`MobDeathPacket`을 `GameServer.Net.Packets`로 이관하면 `RaidBroadcastPackets`의 외부 결합이 사라져 경계 원칙이 온전히 성립한다.
+**보류(2026-07-09, 사용자 확인):** 벤더 라이브러리(`ServerLib`)를 수정하고 사이클 1의 `SessionBattlePackets`와 그 테스트까지 함께 건드려야 하는 사이클 밖 범위라 판단해 미착수. `plan/battle_raid_coop_0708.md` §7에 향후 과제로 남김.
 
 ### [스타일] MEDIUM — `OnConnected`/`OnDisconnected`의 XML 문서가 프로젝트 표준(Thread Safety/Blocking) 미달
 **위치:** `GameServer/Systems/SessionRaidRunner.cs:140,164`
 **문제:** public 진입점 2개가 `<summary>` 한 줄뿐, CLAUDE.md가 요구하는 `<param>`/`<remarks>`(Thread Safety·Blocking)가 없다. `OnConnected`가 fire-and-forget으로 즉시 반환한다는 계약이 시그니처에 드러나지 않는다.
 **수정:** 두 메서드에 `<param name="session">`과 Thread Safety/Blocking을 명시한 `<remarks>`를 추가한다.
+**해소됨(2026-07-09):** 제안대로 두 메서드에 `<param>`/`<remarks>`(Thread Context/Blocking/Thread Safety) 추가.
 
 ### [스타일] MEDIUM — `SessionRaidRunner`의 에러·경계 분기가 테스트되지 않음(happy path E2E만 존재)
 **위치:** `tests/GameServer.Tests/Systems/SessionRaidRunnerEndToEndTests.cs`
 **문제:** `TryGetContext` 실패, `TryAdd` 중복, 접속 종료 후 보상 드롭("무해한 no-op"이라 문서화됐으나 미검증), HP 브로드캐스트 스로틀, `SubmitLoopAsync` 예외 경로 — 5가지 설계 결정 분기 중 어느 것도 테스트가 없다. 특히 보상 드롭 경로는 동시성 안전성이 걸린 결정이라 회귀 방지가 필요하다.
 **수정:** 최소한 보상 드롭 경로와 스로틀 동작에 대한 단위/통합 테스트를 추가한다.
+**해소됨(2026-07-09, 부분):** SRP 분리로 `RaidBroadcaster`/`RaidRewardApplier`가 독립 클래스가 되어 스로틀 경계·보상 라우팅/드롭/Unregister 이후 차단을 단위 테스트로 추가(`RaidBroadcasterTests`/`RaidRewardApplierTests`), `SessionRaidRunner`의 `TryGetContext` 실패/`TryAdd` 중복/중복 해제 방어적 분기도 추가(`SessionRaidRunnerEdgeCaseTests`). `SubmitLoopAsync`의 범용 예외 캐치 경로(`RecordPlayerConnectionError`)는 프로덕션 의존성에 인위적 결함을 주입해야만 트리거 가능해 Medium 심각도 대비 과잉 비용으로 판단해 제외.
 
 ---
 
