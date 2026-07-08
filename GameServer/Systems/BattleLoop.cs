@@ -117,6 +117,15 @@ public sealed class BattleLoop
     /// <param name="tickInterval">틱 사이 대기 시간. 생략 시 500ms. <see cref="TimeSpan.Zero"/>면 대기 없이 즉시 다음 틱으로 진행(테스트용)</param>
     /// <param name="cancellationToken">루프를 중단시킬 토큰. 프로덕션 호출(예: <c>Main.cs</c>)은 이를 생략해 진짜 무한 루프로 동작시킨다</param>
     /// <param name="sink">이벤트를 기록할 싱크. 생략(null)하면 아무 것도 기록하지 않는다.</param>
+    /// <param name="onTick">
+    /// 매 틱마다 <see cref="LogTick"/> 직후 호출(await)되는 선택적 콜백. 네트워크 계층(예:
+    /// <c>SessionBattleRunner</c>)이 틱 결과를 소켓으로 전송하는 등의 용도로 주입한다. 콜백은
+    /// <see cref="BattleTickEvent"/>/<see cref="Player"/>/<see cref="Monster"/>/<see cref="CancellationToken"/>만
+    /// 사용하므로 <see cref="BattleLoop"/>는 네트워크 라이브러리(ServerLib)를 전혀 참조하지 않는다
+    /// (<c>PlayerFactory.CreateTemp</c>와 동일한 도메인/네트워크 경계 원칙). 생략(null)하면 호출하지
+    /// 않는다 — 기존 호출부는 수정 없이 그대로 컴파일된다. 콜백 자신의 예외를 삼키는 책임은
+    /// 호출자(주입한 쪽)에 있다 — 이 루프는 콜백 예외를 격리하지 않는다.
+    /// </param>
     /// <returns>취소되기 전까지(또는 영구히) 완료되지 않는 <see cref="Task"/></returns>
     /// <remarks>
     /// <b>[성능 및 동시성 제약 조건]</b>
@@ -130,7 +139,8 @@ public sealed class BattleLoop
     /// </list>
     /// </remarks>
     public async Task RunAsync(Player player, Monster monster, TimeSpan? tickInterval = null,
-        CancellationToken cancellationToken = default, GameEventSink? sink = null)
+        CancellationToken cancellationToken = default, GameEventSink? sink = null,
+        Func<BattleTickEvent, Player, Monster, CancellationToken, ValueTask>? onTick = null)
     {
         var interval = tickInterval ?? DefaultTickInterval;
         var deltaTime = (float)interval.TotalSeconds;
@@ -139,6 +149,11 @@ public sealed class BattleLoop
         {
             var result = Tick(player, monster, deltaTime);
             LogTick(result, player, sink);
+
+            if (onTick is not null)
+            {
+                await onTick(result, player, monster, cancellationToken);
+            }
 
             if (interval > TimeSpan.Zero)
             {

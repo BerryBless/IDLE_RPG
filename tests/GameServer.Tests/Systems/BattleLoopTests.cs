@@ -125,4 +125,30 @@ public class BattleLoopTests
         Assert.True(monster.FinalStats.CurrentHp < monster.FinalStats.MaxHp);
         Assert.True(player.FinalStats.CurrentHp < player.FinalStats.MaxHp);
     }
+
+    [Fact]
+    public async Task RunAsync_InvokesOnTickPerTick_UntilCancelled()
+    {
+        // HP를 크게 잡아 취소 시점까지 어느 쪽도 죽지 않게 한다 — onTick 호출 횟수만 결정적으로 센다.
+        var player = MakePlayer(hp: 1_000_000, atk: 1);
+        var monster = MakeMonster(hp: 1_000_000, atk: 1);
+        var loop = new BattleLoop();
+        using var cts = new CancellationTokenSource();
+
+        int tickCount = 0;
+        const int StopAfter = 3;
+
+        await loop.RunAsync(player, monster, TimeSpan.Zero, cts.Token, sink: null,
+            onTick: (evt, p, m, ct) =>
+            {
+                tickCount++;
+                if (tickCount >= StopAfter)
+                {
+                    cts.Cancel();
+                }
+                return ValueTask.CompletedTask;
+            });
+
+        Assert.True(tickCount >= StopAfter);
+    }
 }
