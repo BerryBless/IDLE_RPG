@@ -16,12 +16,14 @@
 - `examples/EchoClient`: `ServerLib.ServerNet.CreateClient()`로 에코 서버에 접속해 콘솔 입력을 송수신하는 예제. 실행: `dotnet run --project examples/EchoClient`.
 - `GameServer`: 포트 7777에서 실제 TCP 클라이언트를 받는 게임 서버(`Main.cs`). 로그인은 아직 없음 —
   소켓 연결 시 `SessionPlayerBinder`가 임시 `Player`를 생성해 `session.Context`에 부착한 뒤,
-  `SessionBattleRunner`가 고정 시작 몬스터(고블린 2003)·장비(4001/5001/6001)를 붙여 서버 자동 틱
-  (500ms)으로 전투를 시작한다. 클라이언트는 명령을 보내지 않고 `MobHpPacket`/`MobDeathPacket`을
-  그 세션에만 수신한다(세션마다 독립된 몬스터 — 공유 보스 co-op는 다음 사이클). 해제 시 정리
-  이벤트를 `logs/game-events.ndjson`에 남긴다. 실행: `dotnet run --project GameServer`. 이전의
-  400명 스레드 샤딩 자동배틀 콘솔 데모는 제거됨(git 이력에 보존, `Systems/BattleLoop.cs` 등 도메인
-  클래스와 단위 테스트는 그대로 유지).
+  `SessionRaidRunner`가 시작 장비(4001/5001/6001)를 붙여 **접속한 모든 플레이어가 공유하는 레이드
+  보스(몬스터 7001, Hp=5,000,000)**를 함께 공격하게 한다. 보스 HP 변경은 `RaidEncounter` 액터 루프
+  하나가 전담하고, 그 결과(`MobHpPacket`/`MobDeathPacket`)를 `ISessionRegistry.BroadcastAsync`로
+  접속한 전원에게 동일하게 푸시한다(세션별 독립 몬스터였던 `SessionBattleRunner`는 이번 서버 경로에서
+  대체됨 — 클래스·테스트는 git 이력에 보존). 보스는 반격하지 않아(Atk=0) 플레이어는 죽지 않으며,
+  제한시간(60초) 내 미처치 시 보상 없이 리셋된다. 해제 시 정리 이벤트를 `logs/game-events.ndjson`에
+  남긴다. 실행: `dotnet run --project GameServer`. 이전의 400명 스레드 샤딩 자동배틀 콘솔 데모는
+  제거됨(git 이력에 보존, `Systems/BattleLoop.cs` 등 도메인 클래스와 단위 테스트는 그대로 유지).
 
 새 기능을 추가할 때 Program.cs의 예제도 함께 업데이트할 것.
 
@@ -80,6 +82,7 @@ plan/<기능명>_<MMDD>.md
 | [serverlib_echo_import_0708.md](plan/serverlib_echo_import_0708.md) | ClaudeCodeStudy `ServerLib`(고성능 소켓 서버 라이브러리) 소스 반입 설계. `ServerLib`는 루트 직속(GameServer와 동급), `EchoServer`/`EchoClient`는 `examples/`, 자동 테스트는 `tests/EchoExample.Tests`. 에코 왕복 스모크 테스트로 1차 검증, GameServer 통합은 다음 사이클 |
 | [client_server_split_0708.md](plan/client_server_split_0708.md) | 클라-서버 분리 1단계: GameServer의 400명 스레드 샤딩 데모를 제거하고 `ServerNet` 기반 실제 TCP 서버(포트 7777)로 교체. 로그인 생략, 소켓 연결마다 `SessionPlayerBinder`가 임시 `Player`를 생성해 `session.Context`에 부착. 실소켓 통합 테스트로 연결→해제 사이클 검증, 게임플레이 프로토콜(OnReceived)과 실제 로그인은 다음 사이클 |
 | [battle_multiplayer_0708.md](plan/battle_multiplayer_0708.md) | 전투 멀티플레이 1단계: 접속한 각 세션이 서버 자동 틱(500ms)으로 독립 몬스터를 동시에 사냥, `MobHpPacket`/`MobDeathPacket`을 그 세션에만 푸시(`SessionBattleRunner` 신규, `BattleLoop.RunAsync`에 선택적 `onTick` 콜백 추가). 동시 2연결 세션별 격리 테스트 + 실소켓 스모크로 검증. 공유 보스 co-op·PvP·실로그인은 다음 사이클 |
+| [battle_raid_coop_0708.md](plan/battle_raid_coop_0708.md) | 전투 멀티플레이 2단계: 접속한 모든 플레이어가 공유 레이드 보스(몬스터 7001)를 동시 공격, `RaidEncounter` 액터 루프 하나가 보스 HP를 전담하고 `ISessionRegistry.BroadcastAsync`로 전원에게 `MobHpPacket`/`MobDeathPacket`을 동일하게 푸시(`SessionRaidRunner`/`RaidBroadcastPackets` 신규, `RaidEncounter`에 다중 라이터 지원 + `onStep` 콜백 추가). 세션별 독립 몬스터(`SessionBattleRunner`)는 이 경로에서 대체(git 이력 보존). 다중 라이터 동시성 테스트 + 실소켓 2연결(byte-identical 브로드캐스트 확인) 스모크로 검증. PvP·실로그인·보스 페이즈는 다음 사이클 |
 
 ---
 
