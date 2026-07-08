@@ -128,6 +128,8 @@ public sealed class RaidBroadcaster
     /// </remarks>
     private async ValueTask BroadcastPacketAsync<T>(T packet, CancellationToken cancellationToken) where T : IPacket
     {
+        // ArrayPool<byte>.Shared: 고정 크기 버킷 풀로 TLS 슬롯을 우선 확인하므로, 세션 제출/드레인
+        // 루프가 매 브로드캐스트마다 대여·반납해도 힙 할당 없이 O(1)로 재사용된다.
         var buffer = ArrayPool<byte>.Shared.Rent(PacketPool.HeaderSize + packet.GetBodySize());
         try
         {

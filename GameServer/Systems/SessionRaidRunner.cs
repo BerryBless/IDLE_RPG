@@ -55,9 +55,6 @@ namespace GameServer.Systems;
 public sealed class SessionRaidRunner
 {
     private const int BossMonsterId = 7001;
-    private const int StarterWeaponId = 4001;
-    private const int StarterArmorId = 5001;
-    private const int StarterAccessoryId = 6001;
 
     /// <summary><see cref="SubmitLoopAsync"/>가 <c>tickInterval</c>을 지정하지 않으면 사용하는 기본 간격.</summary>
     private static readonly TimeSpan DefaultTickInterval = TimeSpan.FromMilliseconds(500);
@@ -151,7 +148,7 @@ public sealed class SessionRaidRunner
             return ValueTask.CompletedTask;
         }
 
-        EquipStarterGear(player);
+        StarterGearEquipper.Equip(player, _equipmentTable);
 
         var ctx = new SessionRaidContext { Player = player, Cts = new CancellationTokenSource() };
         if (!_bySessionId.TryAdd(session.SessionId, ctx))
@@ -189,14 +186,6 @@ public sealed class SessionRaidRunner
         return ValueTask.CompletedTask;
     }
 
-    private void EquipStarterGear(Player player)
-    {
-        player.Equipment.Equip(EquipmentFactory.Create(_equipmentTable.GetById(StarterWeaponId)), SlotType.Weapon);
-        player.Equipment.Equip(EquipmentFactory.Create(_equipmentTable.GetById(StarterArmorId)), SlotType.Armor);
-        player.Equipment.Equip(EquipmentFactory.Create(_equipmentTable.GetById(StarterAccessoryId)), SlotType.Accessory);
-        player.UpdateFinalStats();
-        player.RestoreResources();
-    }
 
     /// <summary>
     /// 이 세션이 보스를 공격하는 반복 루프. <see cref="Entity.Update"/>(버프 틱·자연 회복)는 호출하지

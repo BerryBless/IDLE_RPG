@@ -256,10 +256,13 @@ public sealed class RaidEncounter
     /// 전혀 참조하지 않는다(<c>BattleLoop.onTick</c>과 동일한 도메인/네트워크 경계 원칙). 생략(null)
     /// 하면 호출하지 않는다 — 기존 호출부(<c>RaidEncounterTests</c>)는 수정 없이 그대로 컴파일된다.
     /// <b>⚠️ 스로틀 없음:</b> 이 루프는 콜백 호출 빈도를 조절하지 않는다 — 브로드캐스트 스팸 방지가
-    /// 필요하면 호출자(콜백 구현) 쪽에서 스로틀링한다. <b>⚠️ 동기 결합:</b> 콜백을 <c>await</c>하므로
-    /// 콜백이 느리면(예: 브로드캐스트가 느린 클라이언트에 걸림) 그동안 이 액터의 다음 피해 소비가
-    /// 지연된다 — 즉 한 세션의 네트워크 지연이 보스 처리 전체를 잠시 멈출 수 있다(알려진 v1 한계,
-    /// 차후 사이클에서 브로드캐스트를 별도 채널로 분리 예정).
+    /// 필요하면 호출자(콜백 구현) 쪽에서 스로틀링한다. <b>⚠️ 동기 결합, 콜백은 반드시 즉시 반환해야
+    /// 한다:</b> 이 루프는 <paramref name="onStep"/>을 <c>await</c>하므로, 콜백이 느리면 그 시간만큼
+    /// 다음 피해 소비가 지연된다. 프로덕션 구현(<c>RaidBroadcaster.OnStepAsync</c>)이 정확히 이 이유로
+    /// 트리비얼 패스스루(내부 채널에 <c>TryWrite</c>만 하고 즉시 반환)로 설계된 것이다 — 실제 네트워크
+    /// 전송은 별도 드레인 태스크가 전담한다(코드리뷰 HIGH 발견 수정,
+    /// <c>docs/code-reviews/2026-07-08-shared-boss-raid-coop-review.md</c>). 새 <paramref name="onStep"/>을
+    /// 주입할 때도 이 계약(즉시 반환, 실제 작업은 별도 큐/태스크로 위임)을 지켜야 한다.
     /// </param>
     /// <remarks>
     /// <b>Blocking 여부:</b> Non-blocking. <c>ReadAllAsync</c>의 <c>await</c>에서만 대기하며 호출
@@ -271,23 +274,26 @@ public sealed class RaidEncounter
     public async Task RunAsync(GameEventSink sink, CancellationToken cancellationToken,
         Func<RaidStepBroadcast, CancellationToken, ValueTask>? onStep = null)
     {
+        // 로컬 함수: 피해 적용/데드라인 검사 두 스텝이 각각 "이벤트 기록 + onStep 통지"를 거의
+        // 동일하게 반복하던 중복(코드리뷰 Low 발견)을 여기로 흡수한다.
+        async ValueTask EmitAndBroadcastAsync(RaidStepResult step)
+        {
+            Emit(step, sink);
+            if (onStep is not null)
+            {
+                await onStep(BuildBroadcast(step), cancellationToken);
+            }
+        }
+
         try
         {
             await foreach (var request in _damageChannel.Reader.ReadAllAsync(cancellationToken))
             {
                 var damageStep = ApplyDamage(request);
-                Emit(damageStep, sink);
-                if (onStep is not null)
-                {
-                    await onStep(BuildBroadcast(damageStep), cancellationToken);
-                }
+                await EmitAndBroadcastAsync(damageStep);
 
                 var deadlineStep = CheckDeadline(_clock()); // 처치 직후라면 위에서 이미 데드라인이 재시작된 뒤라 안전
-                Emit(deadlineStep, sink);
-                if (onStep is not null)
-                {
-                    await onStep(BuildBroadcast(deadlineStep), cancellationToken);
-                }
+                await EmitAndBroadcastAsync(deadlineStep);
 
                 sink.RecordRaidBossHpPercent(BossHpPercent());
             }
@@ -317,13 +323,23 @@ public sealed class RaidEncounter
             int deadGeneration = _generation - 1;
             bool isDefeat = step.Event == RaidEventType.BossDefeated;
             return new RaidStepBroadcast(
-                step.Event, currentHp, maxHp, deadGeneration, _generation,
+                Event: step.Event,
+                CurrentHp: currentHp,
+                MaxHp: maxHp,
+                DeadGeneration: deadGeneration,
+                NewGeneration: _generation,
                 MvpName: isDefeat ? _lastMvpName : string.Empty,
                 TopDamage: isDefeat ? (long)Math.Max(0, _lastTopDamage) : 0);
         }
 
-        return new RaidStepBroadcast(step.Event, currentHp, maxHp, _generation, _generation,
-            MvpName: string.Empty, TopDamage: 0);
+        return new RaidStepBroadcast(
+            Event: step.Event,
+            CurrentHp: currentHp,
+            MaxHp: maxHp,
+            DeadGeneration: _generation,
+            NewGeneration: _generation,
+            MvpName: string.Empty,
+            TopDamage: 0);
     }
 
     /// <summary>보스의 현재 HP 비율(0~100)을 계산한다. MaxHp가 0 이하인 방어적 경우 0을 반환한다.</summary>

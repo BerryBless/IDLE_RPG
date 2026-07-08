@@ -11,28 +11,11 @@ namespace GameServer.Tests.Systems;
 /// </summary>
 public class RaidEncounterBroadcastTests
 {
-    private static Monster MakeBoss(double hp, double def, double expDrop, double goldDrop)
-    {
-        var boss = new Monster
-        {
-            InstanceId = "raid-boss",
-            MonsterId = 7001,
-            Level = 20,
-            Rewards = new RewardComponent { ExpDrop = expDrop, GoldDrop = goldDrop }
-        };
-        boss.BaseStats.Hp = hp;
-        boss.BaseStats.Def = def;
-        boss.BaseStats.Atk = 0;
-        boss.UpdateFinalStats();
-        boss.RestoreResources();
-        return boss;
-    }
-
     [Fact]
     public async Task RunAsync_OnBossDefeated_OnStepReceivesMvpTopDamageAndGenerationTransition()
     {
         var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var boss = MakeBoss(hp: 100, def: 0, expDrop: 1000, goldDrop: 2000);
+        var boss = RaidTestBoss.Make(hp: 100, def: 0, expDrop: 1000, goldDrop: 2000);
         // timeLimit을 1시간으로 크게 잡아 테스트 실행 중 CheckDeadline이 우연히 만료되지 않게 한다
         // (advisor 지적 — 실시간 clock을 쓰면 느린 CI에서 플레이키해질 수 있음).
         var raid = new RaidEncounter(boss, TimeSpan.FromHours(1), () => now);
@@ -67,7 +50,7 @@ public class RaidEncounterBroadcastTests
     public async Task RunAsync_OnBossDamaged_OnStepReceivesNoneMvpAndUnchangedGeneration()
     {
         var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var boss = MakeBoss(hp: 100, def: 0, expDrop: 1000, goldDrop: 2000);
+        var boss = RaidTestBoss.Make(hp: 100, def: 0, expDrop: 1000, goldDrop: 2000);
         var raid = new RaidEncounter(boss, TimeSpan.FromHours(1), () => now);
         var sink = new GameEventSink(TextWriter.Null);
         using var cts = new CancellationTokenSource();
@@ -98,7 +81,7 @@ public class RaidEncounterBroadcastTests
         // (세대 증가·MVP 없음)만 확인한다. 실제 시간 경과로 데드라인을 만료시키기 위해 timeLimit을
         // 아주 짧게(30ms) 잡고, RunAsync 시작 전 최소 1건을 미리 제출해 루프가 최소 1회 순회하도록
         // 한다(제출이 없으면 ReadAllAsync가 항목을 기다리며 대기해 CheckDeadline이 전혀 실행되지 않음).
-        var boss = MakeBoss(hp: 100, def: 0, expDrop: 1000, goldDrop: 2000);
+        var boss = RaidTestBoss.Make(hp: 100, def: 0, expDrop: 1000, goldDrop: 2000);
         var raid = new RaidEncounter(boss, TimeSpan.FromMilliseconds(30));
         var sink = new GameEventSink(TextWriter.Null);
         using var cts = new CancellationTokenSource();

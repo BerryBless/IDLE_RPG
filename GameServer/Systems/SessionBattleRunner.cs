@@ -47,9 +47,6 @@ namespace GameServer.Systems;
 public sealed class SessionBattleRunner
 {
     private const int StarterMonsterId = 2003;    // 고블린 — 스테이지/스포너 시스템 도입 전까지 고정 시작 몬스터
-    private const int StarterWeaponId = 4001;     // 낡은 검
-    private const int StarterArmorId = 5001;      // 가죽 갑옷
-    private const int StarterAccessoryId = 6001;  // 낡은 반지
 
     private readonly BattleLoop _loop;
     private readonly MonsterTable _monsterTable;
@@ -119,7 +116,7 @@ public sealed class SessionBattleRunner
             return ValueTask.CompletedTask;
         }
 
-        EquipStarterGear(player);
+        StarterGearEquipper.Equip(player, _equipmentTable);
 
         var monster = MonsterFactory.Create(_monsterTable.GetById(StarterMonsterId));
         var ctx = new SessionBattleContext { Monster = monster, Cts = new CancellationTokenSource() };
@@ -159,16 +156,6 @@ public sealed class SessionBattleRunner
         }
 
         return ValueTask.CompletedTask;
-    }
-
-    /// <summary>예전(제거된) Main.cs와 동일한 고정 시작 장비를 착용시킨다.</summary>
-    private void EquipStarterGear(Player player)
-    {
-        player.Equipment.Equip(EquipmentFactory.Create(_equipmentTable.GetById(StarterWeaponId)), SlotType.Weapon);
-        player.Equipment.Equip(EquipmentFactory.Create(_equipmentTable.GetById(StarterArmorId)), SlotType.Armor);
-        player.Equipment.Equip(EquipmentFactory.Create(_equipmentTable.GetById(StarterAccessoryId)), SlotType.Accessory);
-        player.UpdateFinalStats();
-        player.RestoreResources();
     }
 
     /// <summary>

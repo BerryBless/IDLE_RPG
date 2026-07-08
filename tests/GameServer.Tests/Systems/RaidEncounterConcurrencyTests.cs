@@ -11,23 +11,6 @@ namespace GameServer.Tests.Systems;
 /// </summary>
 public class RaidEncounterConcurrencyTests
 {
-    private static Monster MakeBoss(double hp, double def, double expDrop, double goldDrop)
-    {
-        var boss = new Monster
-        {
-            InstanceId = "raid-boss",
-            MonsterId = 7001,
-            Level = 20,
-            Rewards = new RewardComponent { ExpDrop = expDrop, GoldDrop = goldDrop }
-        };
-        boss.BaseStats.Hp = hp;
-        boss.BaseStats.Def = def;
-        boss.BaseStats.Atk = 0;
-        boss.UpdateFinalStats();
-        boss.RestoreResources();
-        return boss;
-    }
-
     [Fact]
     public async Task RunAsync_ManyConcurrentWriters_AllDamageAppliedWithNoLossOrDoubleCount()
     {
@@ -36,7 +19,7 @@ public class RaidEncounterConcurrencyTests
         const double DamagePerHit = 1;
         double bossHp = Writers * HitsPerWriter * DamagePerHit; // 정확히 소진되도록 설계
 
-        var boss = MakeBoss(hp: bossHp, def: 0, expDrop: 1000, goldDrop: 0);
+        var boss = RaidTestBoss.Make(hp: bossHp, def: 0, expDrop: 1000, goldDrop: 0);
         // timeLimit을 1시간으로 크게 잡아 동시 제출이 진행되는 동안 CheckDeadline이 우연히 만료되어
         // _contributions가 리셋되는 플레이키를 원천 차단한다(advisor 지적 — 실시간 clock 기본값은
         // 동시 부하 아래서 타이밍이 흔들릴 수 있음).
