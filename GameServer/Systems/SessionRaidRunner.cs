@@ -159,6 +159,20 @@ public sealed class SessionRaidRunner
     }
 
     /// <summary>접속 시 시작 장비를 착용시키고 이 세션의 보스 공격 제출 루프를 시작한다.</summary>
+    /// <param name="session">방금 연결된 세션. <see cref="ISession.Context"/>에 <see cref="Player"/>가
+    /// 이미 부착돼 있어야 한다(<c>SessionPlayerBinder.OnConnected</c>가 이 메서드보다 먼저 실행돼야
+    /// 함 — 배선 순서는 <c>Main.cs</c>의 <c>OnClientConnected</c> 참고).</param>
+    /// <remarks>
+    /// <b>Thread Context:</b> <c>SocketPipelineListener.AcceptLoopAsync</c>의 단일 accept 루프에서
+    /// 직접 await됩니다. <b>Blocking 여부:</b> Non-blocking — 제출 루프는 <c>Task.Run</c>으로
+    /// fire-and-forget 시작하므로 이 메서드 자체는 즉시 반환합니다(accept 루프를 절대 블로킹하지
+    /// 않음, 클래스 remarks 참고). <b>Thread Safety:</b> Thread-safe — 세션별 컨텍스트는
+    /// <see cref="ConcurrentDictionary{TKey,TValue}"/>(<see cref="_bySessionId"/>/<see cref="_byInstanceId"/>)
+    /// 로 관리되어 여러 세션이 동시에 접속해도 락 경합 없이 안전하다. <see cref="Player"/> 컨텍스트가
+    /// 없거나(<c>TryGetContext</c> 실패) 동일 <c>SessionId</c>가 이미 등록돼 있으면(<c>TryAdd</c> 실패)
+    /// no-op으로 조용히 반환한다 — 두 경우 모두 <c>SessionPlayerBinder</c>/리스너가 이미 세션 생명주기를
+    /// 보장하는 상황에서만 발생 가능한 방어적 분기다.
+    /// </remarks>
     public ValueTask OnConnected(ISession session)
     {
         if (!session.TryGetContext<Player>(out var player))
@@ -183,6 +197,16 @@ public sealed class SessionRaidRunner
     }
 
     /// <summary>해제 시 이 세션의 제출 루프를 취소하고 두 딕셔너리에서 제거한다.</summary>
+    /// <param name="session">방금 연결이 끊어진 세션. <see cref="OnConnected"/>에서 이미 등록됐던
+    /// 세션이 아니면(예: <c>TryAdd</c> 실패로 애초에 등록되지 않았던 세션) no-op이다.</param>
+    /// <remarks>
+    /// <b>Thread Context:</b> 리스너의 수신 루프 <c>finally</c>에서 비동기 발화됩니다(연결별로 다른
+    /// I/O 스레드일 수 있음). <b>Blocking 여부:</b> Non-blocking — <c>Cts.Cancel()</c>은 등록된
+    /// 콜백을 동기 실행하지만 이 세션의 <see cref="SubmitLoopAsync"/> 루프는 그 콜백을 등록하지
+    /// 않으므로(클래스 remarks의 "세션 CTS는 링크하지 않는다" 참고) 즉시 반환한다. <b>Thread Safety:</b>
+    /// Thread-safe — <see cref="ConcurrentDictionary{TKey,TValue}.TryRemove(TKey,out TValue)"/>로
+    /// 딕셔너리 갱신과 제출 루프 취소를 원자적으로 수행한다.
+    /// </remarks>
     public ValueTask OnDisconnected(ISession session)
     {
         if (_bySessionId.TryRemove(session.SessionId, out var ctx))
@@ -208,9 +232,18 @@ public sealed class SessionRaidRunner
     /// 않는다 — 보스가 반격하지 않아(Atk=0) 버프/회복이 전투 결과에 영향을 주지 않고, FinalStats는
     /// 접속 시 장비 착용과 처치 시 레벨업에서만 갱신되면 충분하다(설계 결정, 향후 버프 도입 시 재검토).
     /// </summary>
+    /// <remarks>
+    /// <b>코드리뷰 Medium 발견 수정(성능):</b> <c>Task.Delay(interval, token)</c>를 루프마다 새로
+    /// 호출하면 매 틱 새 타이머 등록/해제 오버헤드가 발생한다. <see cref="PeriodicTimer"/>는 틱마다
+    /// 재사용되는 단일 타이머 핸들이라 이 오버헤드가 없다 — 접속 세션 수만큼 병렬로 도는 이 루프의
+    /// 틱 빈도(기본 500ms)를 고려하면 세션이 많아질수록 절감이 커진다.
+    /// </remarks>
     private async Task SubmitLoopAsync(SessionRaidContext ctx)
     {
         var interval = _tickInterval ?? DefaultTickInterval;
+        // PeriodicTimer: 내부적으로 단일 OS 타이머 핸들을 재사용해 WaitForNextTickAsync를 반복
+        // 호출해도 매번 새 타이머를 등록/해제하지 않는다(Task.Delay 대비 틱당 할당·타이머 큐 조작 감소).
+        using var timer = new PeriodicTimer(interval);
         try
         {
             while (true)
@@ -226,7 +259,7 @@ public sealed class SessionRaidRunner
                 var damage = BattleManager.Instance.CalcFinalDamage(ctx.Player, _boss);
                 _raid.SubmitDamage(ctx.Player.InstanceId, damage);
 
-                await Task.Delay(interval, ctx.Cts.Token); // 취소 시 즉시 OperationCanceledException으로 깨어남
+                await timer.WaitForNextTickAsync(ctx.Cts.Token); // 취소 시 즉시 OperationCanceledException으로 깨어남
             }
         }
         catch (OperationCanceledException)
