@@ -11,6 +11,10 @@
 **예제 코드 위치:** 각 프로젝트의 `Program.cs`가 라이브러리/서버 사용 예제 역할을 한다.
 프로젝트가 늘어남에 따라 이 섹션에 프로젝트별 한 줄 요약을 추가할 것.
 
+- `ServerLib`: 고성능 .NET 10 비동기 소켓 서버 라이브러리(System.IO.Pipelines 기반 Zero-copy 송수신, 세션·하트비트·RUDP 포함). ClaudeCodeStudy에서 소스 반입, 향후 `GameServer`가 참조할 네트워킹 기반.
+- `examples/EchoServer`: `ServerLib.ServerNet.CreateListener()`로 포트 9000 TCP 에코 서버를 띄우는 최소 예제. 실행: `dotnet run --project examples/EchoServer`.
+- `examples/EchoClient`: `ServerLib.ServerNet.CreateClient()`로 에코 서버에 접속해 콘솔 입력을 송수신하는 예제. 실행: `dotnet run --project examples/EchoClient`.
+
 새 기능을 추가할 때 Program.cs의 예제도 함께 업데이트할 것.
 
 ## 하네스: Git 자동 커밋 & 푸시 (Git Automator)
@@ -65,6 +69,7 @@ plan/<기능명>_<MMDD>.md
 |------|------|
 | [gameserver_domain_scaffold_0704.md](plan/gameserver_domain_scaffold_0704.md) | mermaid classDiagram 기반 GameServer 도메인 모델(스탯·전투·아이템·엔티티·보상) 스켈레톤 스캐폴딩. §8에 2026-07-05 기준 구현 상태 classDiagram·원본 대비 델타표 추가 |
 | [battle_system_0705.md](plan/battle_system_0705.md) | 방치형 전투 플로우 설계(온라인 실시간 틱 + 오프라인 수식 하이브리드) 및 TDD 구현: 스탯 집계 파이프라인·버프·보상·오프라인 정산·코드리뷰 수정(F1~F11)·단일 Player vs Monster `BattleLoop` 무한 루프 완료(`GameServer.Tests` 63개), Stage/Wave/Spawner/스킬/부활코스트는 다음 사이클 |
+| [serverlib_echo_import_0708.md](plan/serverlib_echo_import_0708.md) | ClaudeCodeStudy `ServerLib`(고성능 소켓 서버 라이브러리) 소스 반입 설계. `ServerLib`는 루트 직속(GameServer와 동급), `EchoServer`/`EchoClient`는 `examples/`, 자동 테스트는 `tests/EchoExample.Tests`. 에코 왕복 스모크 테스트로 1차 검증, GameServer 통합은 다음 사이클 |
 
 ---
 
