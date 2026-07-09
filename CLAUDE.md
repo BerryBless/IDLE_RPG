@@ -110,6 +110,7 @@ plan/<기능명>_<MMDD>.md
 |------|------|
 | [battle_sharding_0707.md](worklog/battle_sharding_0707.md) | 다중 플레이어 배틀 스레드 샤딩(BattleManager `Random.Shared` 전환·`BattleEventLogger`/`ShardBattleRunner` 신규·`Main.cs` 스레드 샤딩 데모 교체) 구현부터 종합 코드리뷰(79.3점, REQUEST CHANGES) 실행, High 2건(취소 복원·콘솔 락 경합 제거) 후속 수정까지 전체 사이클 |
 | [battle_raid_coop_0708.md](worklog/battle_raid_coop_0708.md) | 전투 멀티플레이 2단계 공유 보스 co-op: `RaidEncounter` 다중 라이터(SingleWriter=false)+onStep 브로드캐스트 콜백 확장, `RaidBroadcastPackets` 순수 매퍼·`SessionRaidRunner` 네트워크 배선 신규, `Main.cs`를 세션 레지스트리 기반 공유 보스(7001)로 교체. 접속 전원이 한 보스를 동시 공격·기여 비례 보상, 실 루프백 2연결 바이트 동일성 실증(144/144 통과) + plan 3종 드리프트 정정까지 전체 사이클 |
+| [battle_raid_coop_review_0709.md](worklog/battle_raid_coop_review_0709.md) | 공유 보스 co-op 종합 코드 리뷰(HIGH 1·Medium 6·Low 12) 후속 수정 사이클: 브로드캐스트를 레이드 액터 루프에서 채널 드레인 태스크로 분리(HIGH), `SessionRaidRunner`를 `RaidBroadcaster`/`RaidRewardApplier`로 SRP 분리(Medium), `PeriodicTimer` 전환·회귀 테스트 9건 추가, 코드-문서 대조 감사로 커밋 3회에 걸쳐 남은 깨진 XML `<see cref>` 3건 발견·정정까지. 테스트 145→154/154, 빌드 0 오류 |
 
 ---
 
