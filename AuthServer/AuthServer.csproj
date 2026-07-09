@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- AuthServer.Tests가 internal 생성자(예: Pbkdf2PasswordHasher(int iterations))를 통해
+             결정적/저비용 반복 횟수를 주입할 수 있도록 테스트 어셈블리에 internal 가시성을 부여한다. -->
+        <InternalsVisibleTo Include="AuthServer.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- ServerLib: 로그인 패킷(LoginRequestPacket/LoginResponsePacket)과 소켓 리스너(ServerNet),
+             공유 HMAC 토큰 코덱(ServerLib.Core.Auth)을 참조하기 위해 필요. -->
+        <ProjectReference Include="..\ServerLib\ServerLib.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- MongoDB.Driver: 계정 저장소(MongoAccountRepository)의 유일한 운영 의존성.
+             ServerLib에는 절대 반입하지 않고 AuthServer exe 안에만 국한한다. -->
+        <PackageReference Include="MongoDB.Driver" Version="3.10.0" />
+    </ItemGroup>
+
+</Project>

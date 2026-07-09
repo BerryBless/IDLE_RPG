@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>AuthServer.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- AuthServer: internal 생성자(Pbkdf2PasswordHasher 저비용 반복 등)에 InternalsVisibleTo로 접근. -->
+    <ProjectReference Include="..\..\AuthServer\AuthServer.csproj" />
+    <!-- ServerLib: 로그인 패킷 직렬화 왕복 테스트와 HmacAuthTokenCodec 단위 테스트에 필요. -->
+    <ProjectReference Include="..\..\ServerLib\ServerLib.csproj" />
+  </ItemGroup>
+</Project>

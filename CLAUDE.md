@@ -24,6 +24,16 @@
   제한시간(60초) 내 미처치 시 보상 없이 리셋된다. 해제 시 정리 이벤트를 `logs/game-events.ndjson`에
   남긴다. 실행: `dotnet run --project GameServer`. 이전의 400명 스레드 샤딩 자동배틀 콘솔 데모는
   제거됨(git 이력에 보존, `Systems/BattleLoop.cs` 등 도메인 클래스와 단위 테스트는 그대로 유지).
+- `AuthServer`: 포트 7778에서 로그인 요청을 처리하는 별도 인증 서버(`Program.cs`). MongoDB
+  (`MongoAccountRepository`, 테스트는 인메모리 페이크)에서 계정을 조회해 PBKDF2 해시
+  (`Pbkdf2PasswordHasher`)로 비밀번호를 검증하고, 성공 시 무상태 HMAC-SHA256 토큰
+  (`ServerLib.Core.Auth.HmacAuthTokenCodec` — GameServer와 공유해 DB 조회 없이 토큰만으로 검증
+  가능)을 `LoginResponsePacket`으로 발급한다. `LoginRequestPacket`(Id=10)만 처리하고 나머지는
+  무시(`AuthConnectionHandler`). `dotnet run --project AuthServer -- --seed`로 결정적 더미 계정
+  3000개(`user0000`.."user2999", 비밀번호 `Pass!0000` 패턴)를 실제 MongoDB에 시딩할 수 있다
+  (`--force` 병기 시 기존 컬렉션을 비우고 재시딩). GameServer가 발급된 토큰을 검증해 실제 로그인
+  게이트를 통과시키는 배선은 아직 없음(다음 사이클 과제, `plan/login_mongo_0709.md` §7 참고).
+  실행: `dotnet run --project AuthServer`.
 
 새 기능을 추가할 때 Program.cs의 예제도 함께 업데이트할 것.
 
@@ -83,6 +93,7 @@ plan/<기능명>_<MMDD>.md
 | [client_server_split_0708.md](plan/client_server_split_0708.md) | 클라-서버 분리 1단계: GameServer의 400명 스레드 샤딩 데모를 제거하고 `ServerNet` 기반 실제 TCP 서버(포트 7777)로 교체. 로그인 생략, 소켓 연결마다 `SessionPlayerBinder`가 임시 `Player`를 생성해 `session.Context`에 부착. 실소켓 통합 테스트로 연결→해제 사이클 검증, 게임플레이 프로토콜(OnReceived)과 실제 로그인은 다음 사이클 |
 | [battle_multiplayer_0708.md](plan/battle_multiplayer_0708.md) | 전투 멀티플레이 1단계: 접속한 각 세션이 서버 자동 틱(500ms)으로 독립 몬스터를 동시에 사냥, `MobHpPacket`/`MobDeathPacket`을 그 세션에만 푸시(`SessionBattleRunner` 신규, `BattleLoop.RunAsync`에 선택적 `onTick` 콜백 추가). 동시 2연결 세션별 격리 테스트 + 실소켓 스모크로 검증. 공유 보스 co-op·PvP·실로그인은 다음 사이클. 문서 끝에 2026-07-08 기준 구현 상태 갱신(Main.cs 배선이 이후 SessionRaidRunner로 대체됨) 추가 |
 | [battle_raid_coop_0708.md](plan/battle_raid_coop_0708.md) | 전투 멀티플레이 2단계: 접속한 모든 플레이어가 공유 레이드 보스(몬스터 7001)를 동시 공격, `RaidEncounter` 액터 루프 하나가 보스 HP를 전담하고 `ISessionRegistry.BroadcastAsync`로 전원에게 `MobHpPacket`/`MobDeathPacket`을 동일하게 푸시(`SessionRaidRunner`/`RaidBroadcastPackets` 신규, `RaidEncounter`에 다중 라이터 지원 + `onStep` 콜백 추가). 세션별 독립 몬스터(`SessionBattleRunner`)는 이 경로에서 대체(git 이력 보존). 다중 라이터 동시성 테스트 + 실소켓 2연결(byte-identical 브로드캐스트 확인) 스모크로 검증. PvP·실로그인·보스 페이즈는 다음 사이클 |
+| [login_mongo_0709.md](plan/login_mongo_0709.md) | 로그인 구현: 별도 `AuthServer` 프로세스 + MongoDB(`IAccountRepository` 추상화, 테스트는 인메모리 페이크) + 더미 3000 계정 정확성 검증. 비밀번호는 PBKDF2(`Pbkdf2PasswordHasher`) 해시 저장, 토큰은 무상태 HMAC-SHA256(`ServerLib/Core/Auth/HmacAuthTokenCodec`, GameServer와 공유 예정)으로 발급. 기존에 정의만 돼 있던 `LoginRequestPacket`/`LoginResponsePacket`/`AuthTokenPacket`을 처음 배선(`AuthConnectionHandler`). TDD로 36개 테스트 신규(HMAC 코덱·해셔·3000 정확성·패킷 왕복·실소켓 E2E), 기존 스위트 회귀 없음. GameServer의 토큰 검증 게이트 배선은 다음 사이클 |
 
 ---
 
