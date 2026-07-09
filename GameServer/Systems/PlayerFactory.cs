@@ -59,8 +59,11 @@ public static class PlayerFactory
     /// 되어, 소켓 없이도 가능해야 할 단위 테스트가 ServerLib를 끌어와야 하는 상황이 된다. 호출부
     /// (연결 콜백)에서 <c>session.SessionId</c>(Guid)만 넘기면 되므로, 이 메서드는 ServerLib를
     /// 전혀 모르는 채로 순수 함수로 남는다.
-    /// <b>AccountId=0:</b> 실 계정이 연결되지 않은 임시 플레이어의 플레이스홀더 값이다. 로그인이
-    /// 구현되면 인증된 실제 계정 ID로 교체된다.
+    /// <b>AccountId=0:</b> 실 계정이 연결되지 않은 임시 플레이어의 플레이스홀더 값이다.
+    /// <b>Main.cs 미사용(2026-07-09 토큰 게이트 도입):</b> 실제 연결 배선에서는 더 이상 이 메서드가
+    /// 쓰이지 않는다 — <see cref="SessionAuthGate"/>가 인증된 세션에 <see cref="Create"/>로 실
+    /// <c>AccountId</c>를 결합한다(<c>plan/gameserver_auth_gate_0709.md</c>). 이 메서드는 삭제하지
+    /// 않았다 — 여러 테스트가 "빠르게 Player를 만드는" 픽스처 헬퍼로 여전히 직접 호출한다.
     /// <b>Thread Safety / Memory Allocation / Blocking:</b> <see cref="Create"/>와 동일 —
     /// 공유 상태 없이 완전히 독립된 새 인스턴스를 동기·비차단으로 반환한다.
     /// </remarks>

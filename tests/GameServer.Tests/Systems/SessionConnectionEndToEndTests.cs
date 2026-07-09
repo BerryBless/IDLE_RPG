@@ -9,13 +9,20 @@ using ServerLib.Interface;
 namespace GameServer.Tests.Systems;
 
 /// <summary>
-/// <c>Main.cs</c>의 핵심 연결 배선(소켓 연결 시 임시 <see cref="Player"/> 생성·부착, 해제 시 정리)을
-/// 실제 루프백 TCP 소켓으로 End-to-End 검증합니다.
+/// <see cref="SessionPlayerBinder"/> 자체의 연결/해제 계약(<see cref="Player"/> 생성·부착, 해제
+/// 시 정리)을 실제 루프백 TCP 소켓으로 검증합니다.
 /// </summary>
 /// <remarks>
+/// <b>2026-07-09 토큰 게이트 도입 이후:</b> <c>Main.cs</c>는 더 이상 접속 즉시
+/// <see cref="SessionPlayerBinder.OnConnected"/>를 호출하지 않습니다(<see cref="SessionAuthGate"/>가
+/// 대체 — <c>plan/gameserver_auth_gate_0709.md</c> 참고). 이 테스트는 더 이상 "Main.cs 배선 재현"이
+/// 아니라, <see cref="SessionPlayerBinder"/> 클래스 자체가 실소켓 위에서 여전히 올바르게 동작하는지
+/// (다른 테스트들이 이 클래스를 픽스처 헬퍼로 계속 의존하므로)를 검증하는 단위 계약 테스트입니다.
+/// <c>Main.cs</c>의 실제 신규 배선은 <c>SessionAuthGateEndToEndTests</c>가 검증합니다.
+/// <br/><br/>
 /// <c>Main.cs</c>는 top-level 문이라 테스트에서 직접 호출할 수 없습니다(<c>EchoEndToEndTests</c>와
 /// 동일한 이유). 대신 <see cref="SessionPlayerBinder"/>(실제 프로덕션 클래스)를 실제
-/// <see cref="ServerNet.CreateListener"/> 콜백에 그대로 연결해 Main.cs와 동일한 배선을 재현합니다.
+/// <see cref="ServerNet.CreateListener"/> 콜백에 그대로 연결해 그 계약을 재현합니다.
 /// <para>
 /// <b>[검증 전략]</b> <see cref="GameEventSink"/>의 NDJSON 파일 쓰기는 내부 채널을 거쳐 비동기로
 /// 수행되므로(별도 소비자 태스크), 콜백 완료 직후 파일/StringWriter 내용을 읽으면 경쟁 상태가 된다

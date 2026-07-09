@@ -50,6 +50,14 @@ public sealed class SessionPlayerBinder
     /// <param name="session">새로 연결된 세션</param>
     /// <returns>완료된(무할당) <see cref="ValueTask"/></returns>
     /// <remarks>
+    /// <b>Main.cs 미사용(2026-07-09 토큰 게이트 도입):</b> <c>Main.cs</c>는 더 이상 접속 즉시 이
+    /// 메서드를 호출하지 않는다 — <see cref="SessionAuthGate"/>가 <c>AuthTokenPacket</c> 검증
+    /// 성공 시에만 <see cref="PlayerFactory.Create"/>로 실제 계정의 <see cref="Player"/>를 결합하는
+    /// 강한 인증 관문으로 대체했다(<c>plan/gameserver_auth_gate_0709.md</c> 참고). 이 메서드는 삭제하지
+    /// 않았다 — 레이드/보상 관련 여러 테스트가 "빠르게 Player를 붙인 세션"을 만드는 픽스처 헬퍼로
+    /// 여전히 직접 호출하고 있어(예: <c>SessionRaidRunnerEndToEndTests</c>), 삭제하면 이번 사이클과
+    /// 무관한 테스트까지 건드리는 범위 확장이 된다.
+    /// <br/><br/>
     /// <c>session.SessionId</c>(<see cref="Guid"/>)를 그대로 <see cref="PlayerFactory.CreateTemp"/>에
     /// 넘깁니다 — ServerLib가 세션마다 고유하게 부여하는 값이라 로그인 없이도 충돌 없는 식별자를
     /// 얻을 수 있습니다.

@@ -3,9 +3,12 @@
 global using BigNumber = double;
 
 using System.Net;
+using System.Text;
 using GameServer.Items;
 using GameServer.Systems;
 using ServerLib;
+using ServerLib.Core.Auth;
+using ServerLib.Core.Serialization;
 using ServerLib.Interface;
 
 // 클라-서버 분리 1단계: 이전까지 GameServer는 400명의 가상 플레이어가 스레드 샤딩으로 자동
@@ -17,11 +20,17 @@ using ServerLib.Interface;
 // 동시에 사냥하도록 만들었다(SessionBattleRunner) — 그 클래스와 테스트는 git 이력에 보존되며
 // 이 서버 경로에서는 더 이상 배선하지 않는다.
 //
-// 전투 멀티플레이 2단계(이번 사이클): 접속한 모든 클라이언트가 하나의 공유 레이드 보스(몬스터
-// 7001)를 동시에 공격한다(SessionRaidRunner) — 보스 HP/처치를 ISessionRegistry로 전 세션에
-// 브로드캐스트한다. 보스는 반격하지 않으므로(Atk=0) 플레이어는 죽지 않는다(순수 DPS 레이스).
-// 제한시간 내 미처치 시 보상 없이 리셋(RaidFailed). 로그인은 여전히 없다(SessionPlayerBinder가
-// 소켓 연결마다 임시 Player를 생성). PvP·실제 로그인·스테이지 시스템은 이후 사이클 과제다.
+// 전투 멀티플레이 2단계: 접속한 모든 클라이언트가 하나의 공유 레이드 보스(몬스터 7001)를 동시에
+// 공격한다(SessionRaidRunner) — 보스 HP/처치를 ISessionRegistry로 전 세션에 브로드캐스트한다.
+// 보스는 반격하지 않으므로(Atk=0) 플레이어는 죽지 않는다(순수 DPS 레이스). 제한시간 내 미처치 시
+// 보상 없이 리셋(RaidFailed).
+//
+// 토큰 게이트(이번 사이클): 별도 AuthServer(plan/login_mongo_0709.md)가 발급한 HMAC 토큰을
+// AuthTokenPacket으로 받아 SessionAuthGate가 검증하고, 성공한 세션에만 실제 Player(인증된
+// AccountId)를 결합해 레이드 참전을 허용한다(plan/gameserver_auth_gate_0709.md). 접속 즉시 임시
+// Player를 만들던 SessionPlayerBinder.OnConnected/PlayerFactory.CreateTemp 경로는 더 이상
+// 배선하지 않는다(메서드 자체는 다른 테스트의 픽스처 헬퍼로 계속 쓰이므로 삭제하지 않음).
+// PvP·회원가입·스테이지 시스템은 이후 사이클 과제다.
 
 const int Port = 7777; // examples/EchoServer(9000)와 겹치지 않도록 구분 — 필요 시 동시 실행 가능.
 var raidTimeLimit = TimeSpan.FromSeconds(60); // 이 시간 내에 전원이 힘을 모아 보스를 잡아야 한다.
@@ -35,9 +44,18 @@ var equipmentTable = EquipmentTable.CreateDefault();
 // 않는다 — 이 규칙은 네트워크 서버로 전환한 뒤에도 그대로 유지한다.
 await using var sink = GameEventSink.CreateFile(Path.Combine("logs", "game-events.ndjson"));
 
-// SessionPlayerBinder: PlayerFactory.CreateTemp로 임시 Player를 만들어 session.Context에
-// 부착하고, 연결/해제/오류를 sink에 기록한다.
+// SessionPlayerBinder: 이제 OnConnected는 배선하지 않는다(SessionAuthGate가 대체) — 연결
+// 해제/오류 시 sink에 기록하는 OnDisconnected/OnError만 계속 사용한다.
 var binder = new SessionPlayerBinder(levelSystem, sink);
+
+// HMAC 시크릿: AuthServer(AuthServerConfig.HmacSecret)와 반드시 동일한 값을 공유해야 발급된
+// 토큰을 이쪽에서 검증할 수 있다. 설정값이 이거 하나뿐이라 Port처럼 인라인으로 읽는다(별도
+// Config 클래스 없음).
+var hmacSecret = Encoding.UTF8.GetBytes(
+    Environment.GetEnvironmentVariable("IDLERPG_AUTH_HMAC_SECRET") ?? "dev-only-insecure-hmac-secret-change-me");
+// HmacAuthTokenCodec: 발급(IAuthTokenIssuer)도 구현하지만 GameServer는 검증(IAuthTokenValidator)만
+// 쓴다 — 토큰 발급은 AuthServer 전용 책임.
+var authGate = new SessionAuthGate(new HmacAuthTokenCodec(hmacSecret), levelSystem, sink, new BinaryPacketSerializer());
 
 // ServerNet.CreateSessionRegistry(): 공유 보스 co-op는 보스 HP/처치를 접속한 모든 세션에
 // 브로드캐스트해야 하므로(1단계와 달리 특정 세션 하나에게만 보내는 것으로는 부족) 세션 레지스트리가
@@ -77,28 +95,32 @@ IServerListener listener = ServerNet.CreateListener(registry);
 // (IServerListener.SessionSendTimeout은 Not thread-safe, 이미 수락된 세션에는 소급 적용 안 됨).
 listener.SessionSendTimeout = TimeSpan.FromSeconds(2);
 
-// 연결: binder가 먼저 실행되어 Player를 Context에 부착한 뒤에 raidRunner가 그 Player를 읽어
-// 장비 착용 + 제출 루프를 시작해야 한다. 해제: raidRunner가 먼저 제출 루프를 정지시킨 뒤 binder가
-// 연결 해제를 기록한다. Start() 호출 전에 배선을 마쳐야 한다(이후 설정 시 InvalidOperationException).
-listener.OnClientConnected = async session =>
+// 연결 자체로는 아무것도 하지 않는다(OnClientConnected 미배선) — Player는 인증 성공 전까지
+// 만들어지지 않는다. 클라이언트가 AuthTokenPacket을 보내야 비로소 SessionAuthGate가 검증하고,
+// 이번 호출에서 "새로 인증 성공"(반환값 true)한 경우에만 raidRunner.OnConnected로 이어 레이드
+// 참전을 시작한다. authGate.HandleAsync는 IServerListener.OnReceived와 시그니처가 달라(bool 반환)
+// 직접 대입할 수 없으므로 이 얇은 람다로 감싼다.
+listener.OnReceived = async (session, data) =>
 {
-    await binder.OnConnected(session);
-    await raidRunner.OnConnected(session);
+    bool justAuthenticated = await authGate.HandleAsync(session, data);
+    if (justAuthenticated)
+        await raidRunner.OnConnected(session);
 };
+// 해제: raidRunner가 먼저 제출 루프를 정지시킨 뒤 binder가 연결 해제를 기록한다. 인증 전에
+// 끊긴 세션은 TryGetContext<Player> 실패로 두 메서드 모두 방어적으로 no-op 처리된다.
 listener.OnClientDisconnected = async session =>
 {
     await raidRunner.OnDisconnected(session);
     await binder.OnDisconnected(session);
 };
 listener.OnClientError = binder.OnError;
-// OnReceived는 아직 배선하지 않는다 — 전투는 서버 자동 틱이라 클라이언트가 보낼 명령이 없다.
 
 // IdleTimeout은 설정하지 않는다: 하트비트/핑 프로토콜이 아직 없어, 설정하면 정상 연결도 유휴로
-// 오판해 즉시 스윕된다. 프로토콜이 생기는 사이클에서 함께 도입한다.
+// 오판해 즉시 스윕된다. 미인증 세션은 Player가 없어 리소스 비용이 없으므로 방치해도 안전하다
+// (프로토콜이 생기는 사이클에서 타임아웃 정책도 함께 재검토).
 
-// IPAddress.Loopback: 인증(로그인)이 아직 없는 상태이므로 IPAddress.Any로 외부에 노출하면
-// 누구나 임시 플레이어를 무제한으로 생성할 수 있는 서비스가 인터넷에 노출된다. 로그인 구현 후
-// 재검토한다.
+// IPAddress.Loopback: 토큰 게이트가 생겼어도 AuthTokenPacket이 여전히 평문으로 오가므로(TLS
+// 미도입) IPAddress.Any로 외부에 노출하기엔 이르다. TLS 도입 후 재검토한다.
 listener.Start(Port, IPAddress.Loopback);
 
 try
