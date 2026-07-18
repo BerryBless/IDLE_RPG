@@ -16,7 +16,7 @@ namespace ServerLib.Core.Serialization.Packets;
 /// <item><description><b>보안:</b> Password 필드는 평문 전송됩니다. 운영 환경에서는 TLS를 반드시 사용하세요.</description></item>
 /// </list>
 /// </remarks>
-// sealed class 선택: string 2개(참조 타입)를 담으므로 struct로도 힙 할당이 불가피 — ChatPacket과 동일 패턴.
+// sealed class 선택: string 2개(참조 타입)를 담으므로 struct로 선언해도 참조 필드로 인해 힙 할당이 불가피하다.
 // new() 제약 필수: BinaryPacketSerializer.Deserialize<T>()가 new LoginRequestPacket()으로 인스턴스 생성 후 Deserialize 호출.
 public sealed class LoginRequestPacket : IPacket
 {
