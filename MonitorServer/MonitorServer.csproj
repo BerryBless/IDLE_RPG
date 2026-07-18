@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <!-- Microsoft.NET.Sdk.Web(FrameworkReference Microsoft.AspNetCore.App 내장)이 자동으로 launchSettings.json을
+             기대하지만 이 프로젝트는 콘솔 앱처럼 dotnet run으로만 구동하므로 생성하지 않는다. -->
+        <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- ServerLib: GameServer 텔레메트리 리스너(7779)에 ServerNet.CreateClient()로 구독하기 위해
+             참조한다. MonitorServer는 GameServer 자체를 참조하지 않는다 — TelemetrySnapshotPacket은
+             ServerLib에 있으므로(레이어 경계: 게임 도메인과 무관한 전송 계층 패킷) GameServer 전체를
+             끌어올 필요가 없다. -->
+        <ProjectReference Include="..\ServerLib\ServerLib.csproj" />
+    </ItemGroup>
+
+</Project>

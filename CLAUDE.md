@@ -22,7 +22,10 @@
   접속한 전원에게 동일하게 푸시한다(세션별 독립 몬스터였던 `SessionBattleRunner`는 이번 서버 경로에서
   대체됨 — 클래스·테스트는 git 이력에 보존). 보스는 반격하지 않아(Atk=0) 플레이어는 죽지 않으며,
   제한시간(60초) 내 미처치 시 보상 없이 리셋된다. 해제 시 정리 이벤트를 `logs/game-events.ndjson`에
-  남긴다. 실행: `dotnet run --project GameServer`. 이전의 400명 스레드 샤딩 자동배틀 콘솔 데모는
+  남긴다. 포트 7779에 별도 읽기 전용 텔레메트리 리스너(인증 없음, 루프백 한정)도 함께 열어
+  `TelemetryPublisher`가 1초 주기로 접속자 수·리스너 통계·공유 보스 HP/세대/MVP를
+  `TelemetrySnapshotPacket`으로 브로드캐스트한다(`MonitorServer`가 구독, `plan/web_monitoring_0718.md`).
+  실행: `dotnet run --project GameServer`. 이전의 400명 스레드 샤딩 자동배틀 콘솔 데모는
   제거됨(git 이력에 보존, `Systems/BattleLoop.cs` 등 도메인 클래스와 단위 테스트는 그대로 유지).
 - `AuthServer`: 포트 7778에서 로그인 요청을 처리하는 별도 인증 서버(`Program.cs`). MongoDB
   (`MongoAccountRepository`, 테스트는 인메모리 페이크)에서 계정을 조회해 PBKDF2 해시
@@ -34,6 +37,13 @@
   (`--force` 병기 시 기존 컬렉션을 비우고 재시딩). GameServer가 발급된 토큰을 검증해 실제 로그인
   게이트를 통과시키는 배선은 아직 없음(다음 사이클 과제, `plan/login_mongo_0709.md` §7 참고).
   실행: `dotnet run --project AuthServer`.
+- `MonitorServer`: GameServer의 텔레메트리 리스너(포트 7779)를 `ServerLib` 클라이언트로 구독해
+  웹 브라우저에 실시간 상태 대시보드를 제공하는 별도 프로세스(`Program.cs`). `TelemetryClientLoop`가
+  끊기면 자동 재접속하며 최신 스냅샷을 `TelemetrySnapshotStore`(락 없는 volatile 참조 교체)에 반영하고,
+  ASP.NET Core 미니멀 API가 `GET /`(단일 페이지 대시보드)와 `GET /events`(1초 주기 Server-Sent
+  Events)를 서빙한다. 웹 의존성(ASP.NET Core)은 이 프로젝트에만 있다 — GameServer/ServerLib는 여전히
+  외부 의존성 0(`plan/web_monitoring_0718.md`). 실행: `dotnet run --project MonitorServer` (기본
+  포트 8080, `IDLERPG_MONITOR_WEB_PORT`로 재정의 가능). GameServer를 먼저 띄워야 실제 값이 채워진다.
 
 새 기능을 추가할 때 Program.cs의 예제도 함께 업데이트할 것.
 
@@ -95,6 +105,7 @@ plan/<기능명>_<MMDD>.md
 | [battle_raid_coop_0708.md](plan/battle_raid_coop_0708.md) | 전투 멀티플레이 2단계: 접속한 모든 플레이어가 공유 레이드 보스(몬스터 7001)를 동시 공격, `RaidEncounter` 액터 루프 하나가 보스 HP를 전담하고 `ISessionRegistry.BroadcastAsync`로 전원에게 `MobHpPacket`/`MobDeathPacket`을 동일하게 푸시(`SessionRaidRunner`/`RaidBroadcastPackets` 신규, `RaidEncounter`에 다중 라이터 지원 + `onStep` 콜백 추가). 세션별 독립 몬스터(`SessionBattleRunner`)는 이 경로에서 대체(git 이력 보존). 다중 라이터 동시성 테스트 + 실소켓 2연결(byte-identical 브로드캐스트 확인) 스모크로 검증. PvP·실로그인·보스 페이즈는 다음 사이클 |
 | [login_mongo_0709.md](plan/login_mongo_0709.md) | 로그인 구현: 별도 `AuthServer` 프로세스 + MongoDB(`IAccountRepository` 추상화, 테스트는 인메모리 페이크) + 더미 3000 계정 정확성 검증. 비밀번호는 PBKDF2(`Pbkdf2PasswordHasher`) 해시 저장, 토큰은 무상태 HMAC-SHA256(`ServerLib/Core/Auth/HmacAuthTokenCodec`, GameServer와 공유 예정)으로 발급. 기존에 정의만 돼 있던 `LoginRequestPacket`/`LoginResponsePacket`/`AuthTokenPacket`을 처음 배선(`AuthConnectionHandler`). TDD로 36개 테스트 신규(HMAC 코덱·해셔·3000 정확성·패킷 왕복·실소켓 E2E), 기존 스위트 회귀 없음. GameServer의 토큰 검증 게이트 배선은 다음 사이클 |
 | [gameserver_auth_gate_0709.md](plan/gameserver_auth_gate_0709.md) | GameServer 토큰 게이트: AuthServer가 발급한 `AuthTokenPacket`을 `SessionAuthGate`(신규)가 `HmacAuthTokenCodec`으로 검증해 성공 시에만 실제 `Player`(claims.AccountId)를 결합하고 공유 레이드에 참전시키는 강한 관문. 검증 결과는 신규 `AuthTokenAckPacket`(Id=18)으로 명시 통지. `PlayerFactory.CreateTemp`/`SessionPlayerBinder.OnConnected`는 다른 테스트의 픽스처 헬퍼로 계속 쓰이고 있어 삭제 대신 Main.cs 배선만 제거(문서만 갱신). 동시 다중 로그인 시 보상 오배송을 막기 위해 Player instanceId에 accountId+sessionId를 함께 사용 |
+| [web_monitoring_0718.md](plan/web_monitoring_0718.md) | 웹 실시간 모니터링 대시보드: GameServer에 읽기 전용 텔레메트리 리스너(포트 7779, 인증 없음) 신설, `RaidEncounter`의 onStep을 `RaidBroadcaster`와 함께 팬아웃 구독하는 `TelemetryPublisher`(용량1 DropOldest 채널로 락 없는 "최신 값만 유지" + 1초 `PeriodicTimer`)가 `TelemetrySnapshotPacket`(Id=19)을 브로드캐스트. 신규 별도 프로세스 `MonitorServer`(ASP.NET Core, `ServerLib`만 참조)가 `TelemetryClientLoop`로 자동 재접속 구독해 `GET /`(대시보드)·`GET /events`(1초 SSE)를 서빙 — 웹 의존성은 이 프로젝트에만 존재, GameServer/ServerLib는 외부 의존성 0 유지. 플레이어별 상세(레벨/골드/기여도)는 크로스 스레드 데이터 레이스 위험으로 v1 스코프에서 명시 제외(다음 사이클). 실소켓 2연결 byte-identical 검증 포함 신규 테스트 6건, 기존 176개 회귀 없음 |
 
 ---
 

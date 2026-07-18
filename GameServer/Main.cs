@@ -30,9 +30,16 @@ using ServerLib.Interface;
 // AccountId)를 결합해 레이드 참전을 허용한다(plan/gameserver_auth_gate_0709.md). 접속 즉시 임시
 // Player를 만들던 SessionPlayerBinder.OnConnected/PlayerFactory.CreateTemp 경로는 더 이상
 // 배선하지 않는다(메서드 자체는 다른 테스트의 픽스처 헬퍼로 계속 쓰이므로 삭제하지 않음).
+//
+// 웹 모니터링 텔레메트리(이번 사이클, plan/web_monitoring_0718.md): 게임 리스너(7777)와 완전히
+// 분리된 두 번째 읽기 전용 리스너(7779)를 열어, 별도 MonitorServer 프로세스가 ServerLib 클라이언트로
+// 구독하면 TelemetryPublisher가 1초 주기로 접속자 수·리스너 통계·공유 보스 HP/세대/MVP를
+// TelemetrySnapshotPacket으로 브로드캐스트한다. 텔레메트리 리스너는 인증 게이트가 없다(읽기 전용,
+// 루프백 한정) — OnReceived를 배선하지 않아 모니터가 보내는 데이터는 애초에 처리되지 않는다.
 // PvP·회원가입·스테이지 시스템은 이후 사이클 과제다.
 
 const int Port = 7777; // examples/EchoServer(9000)와 겹치지 않도록 구분 — 필요 시 동시 실행 가능.
+const int TelemetryPort = 7779; // 게임 리스너(7777)와 겹치지 않는 별도 포트 — 웹 모니터링 전용 읽기 전용 구독.
 var raidTimeLimit = TimeSpan.FromSeconds(60); // 이 시간 내에 전원이 힘을 모아 보스를 잡아야 한다.
 
 var levelSystem = PlayerLevelSystem.CreateDefault();
@@ -62,10 +69,31 @@ var authGate = new SessionAuthGate(new HmacAuthTokenCodec(hmacSecret), levelSyst
 // 필수다 — 반드시 CreateListener에도 같은 인스턴스를 넘겨야 리스너가 접속/해제를 자동 등록/해제한다.
 var registry = ServerNet.CreateSessionRegistry();
 
+// 텔레메트리 전용 세션 레지스트리: 게임 세션(registry)과 완전히 분리해 추적한다 — 모니터 프로세스가
+// 게임 리스너(7777)의 인증 게이트를 거치지 않고도 별도 포트(7779)로 구독할 수 있게 하기 위함이다.
+var telemetryRegistry = ServerNet.CreateSessionRegistry();
+
+// ServerNet.CreateListener(registry): 위에서 만든 레지스트리를 그대로 전달 — 리스너가 접속/해제
+// 시 세션을 자동 등록/해제해 registry.BroadcastAsync의 대상 모집단을 채운다. 객체 생성만 여기서
+// 먼저 하고(TelemetryPublisher가 ActiveSessionCount 등을 읽으려면 인스턴스가 필요) 실제
+// listener.Start()는 raidRunner의 루프들이 기동된 뒤로 미룬다(아래 raidRunner.Start() 주변 주석 참고).
+IServerListener listener = ServerNet.CreateListener(registry);
+
+// 텔레메트리 리스너: 게임 리스너와 별개의 IServerListener 인스턴스. OnReceived를 배선하지 않으므로
+// 모니터 프로세스가 무언가를 보내도 조용히 무시된다(읽기 전용 구독 전용 — 게임 프로토콜과 무관).
+IServerListener telemetryListener = ServerNet.CreateListener(telemetryRegistry);
+
+// TelemetryPublisher: RaidEncounter의 onStep을 SessionRaidRunner가 RaidBroadcaster와 함께 팬아웃
+// 구독하도록 아래 raidRunner 생성자에 주입한다. 게임 리스너(listener)의 ActiveSessionCount/IsRunning/
+// TotalRejectedConnections를 읽고, telemetryRegistry로 접속한 모니터 전원에게 브로드캐스트한다.
+var telemetryPublisher = new TelemetryPublisher(listener, telemetryRegistry);
+
 // SessionRaidRunner: binder가 부착한 Player를 읽어 시작 장비를 착용시키고, 공유 레이드 보스(7001)에
 // 대한 세션별 피해 제출 루프를 시작한다. 보스 HP 변경·기여도 판정은 내부 RaidEncounter 액터 루프
-// 하나가 전담하며, 그 결과를 registry.BroadcastAsync로 전 세션에 푸시한다.
-var raidRunner = new SessionRaidRunner(levelSystem, monsterTable, equipmentTable, sink, registry, raidTimeLimit);
+// 하나가 전담하며, 그 결과를 registry.BroadcastAsync로 전 세션에 푸시한다. telemetryPublisher를
+// 함께 주입해 같은 onStep 스트림을 웹 모니터링 대시보드로도 팬아웃한다.
+var raidRunner = new SessionRaidRunner(levelSystem, monsterTable, equipmentTable, sink, registry, raidTimeLimit,
+    telemetryPublisher: telemetryPublisher);
 
 // CancellationTokenSource: Ctrl+C(SIGINT) 기본 동작인 즉시 프로세스 종료 대신, 협조적 취소로
 // 바꾼다 — sink는 await using으로 선언돼 있어 프로세스가 강제 종료되면 NDJSON 파일의 마지막
@@ -79,13 +107,9 @@ Console.CancelKeyPress += (_, e) =>
     cts.Cancel();
 };
 
-// 레이드 액터 루프 + 보상 드레인 루프를 먼저 기동한 뒤 리스너를 연다 — 첫 접속이 들어오기 전에
-// SubmitDamage를 받을 준비가 되어 있어야 한다.
+// 레이드 액터 루프 + 보상 드레인 루프 + 브로드캐스트 드레인 루프 + 텔레메트리 퍼블리시 루프를 먼저
+// 기동한 뒤 리스너를 연다 — 첫 접속이 들어오기 전에 SubmitDamage를 받을 준비가 되어 있어야 한다.
 raidRunner.Start(cts.Token);
-
-// ServerNet.CreateListener(registry): 위에서 만든 레지스트리를 그대로 전달 — 리스너가 접속/해제
-// 시 세션을 자동 등록/해제해 registry.BroadcastAsync의 대상 모집단을 채운다.
-IServerListener listener = ServerNet.CreateListener(registry);
 
 // SessionSendTimeout: 코드리뷰 발견(docs/code-reviews/2026-07-08-shared-boss-raid-coop-review.md,
 // 보안 Medium/CWE-400) 수정 — 미설정(기본 null=무한 대기) 상태였다면 수신 버퍼를 비우지 않는
@@ -94,6 +118,10 @@ IServerListener listener = ServerNet.CreateListener(registry);
 // SocketException으로 끊고 나머지 브로드캐스트는 계속되게 한다. Start() 호출 전에 설정해야 한다
 // (IServerListener.SessionSendTimeout은 Not thread-safe, 이미 수락된 세션에는 소급 적용 안 됨).
 listener.SessionSendTimeout = TimeSpan.FromSeconds(2);
+// 텔레메트리 리스너도 같은 근거로 유한 송신 타임아웃을 둔다 — TelemetryPublisher.BroadcastPacketAsync도
+// telemetryRegistry.BroadcastAsync를 거치므로, 정지된 모니터 클라이언트 1개가 텔레메트리 브로드캐스트
+// 전체를 무한정 붙잡는 것을 막는다.
+telemetryListener.SessionSendTimeout = TimeSpan.FromSeconds(2);
 
 // 연결 자체로는 아무것도 하지 않는다(OnClientConnected 미배선) — Player는 인증 성공 전까지
 // 만들어지지 않는다. 클라이언트가 AuthTokenPacket을 보내야 비로소 SessionAuthGate가 검증하고,
@@ -115,13 +143,21 @@ listener.OnClientDisconnected = async session =>
 };
 listener.OnClientError = binder.OnError;
 
+// 텔레메트리 리스너는 OnReceived/OnClientConnected/OnClientDisconnected를 배선하지 않는다 —
+// telemetryRegistry가 리스너 내부에서 접속/해제를 자동 등록/해제하므로(ServerNet.CreateListener
+// 계약) 그 자체로 BroadcastAsync의 대상 모집단이 채워진다. 모니터 프로세스는 아무것도 보내지
+// 않는 읽기 전용 구독자이므로 게임 프로토콜을 처리할 필요가 없다.
+
 // IdleTimeout은 설정하지 않는다: 하트비트/핑 프로토콜이 아직 없어, 설정하면 정상 연결도 유휴로
 // 오판해 즉시 스윕된다. 미인증 세션은 Player가 없어 리소스 비용이 없으므로 방치해도 안전하다
-// (프로토콜이 생기는 사이클에서 타임아웃 정책도 함께 재검토).
+// (프로토콜이 생기는 사이클에서 타임아웃 정책도 함께 재검토). 텔레메트리 리스너도 동일한 이유로
+// IdleTimeout을 두지 않는다 — 모니터는 애초에 아무것도 보내지 않으므로 유휴 판정 자체가 무의미하다.
 
 // IPAddress.Loopback: 토큰 게이트가 생겼어도 AuthTokenPacket이 여전히 평문으로 오가므로(TLS
 // 미도입) IPAddress.Any로 외부에 노출하기엔 이르다. TLS 도입 후 재검토한다.
 listener.Start(Port, IPAddress.Loopback);
+// 텔레메트리 리스너도 루프백 한정 — 인증 게이트가 없는 읽기 전용 리스너라 외부 노출은 더더욱 이르다.
+telemetryListener.Start(TelemetryPort, IPAddress.Loopback);
 
 try
 {
@@ -137,6 +173,7 @@ catch (OperationCanceledException)
 // 있다 — 그 경우 아래 sink가 먼저 닫히면 해당 PlayerDisconnected 로그는 best-effort로 유실될 수
 // 있다(정상 동작 중 발생하는 연결 해제는 항상 안전하게 기록된다).
 listener.Stop();
+telemetryListener.Stop();
 
 // await using으로 선언했으므로 sink.DisposeAsync()는 스코프 종료 시 자동 호출된다
 // (CompleteWriting → 소비자 종료 대기 → 파일 flush/close → 계측기 해제).

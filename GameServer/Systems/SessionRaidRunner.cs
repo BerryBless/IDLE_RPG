@@ -70,6 +70,7 @@ public sealed class SessionRaidRunner
     private readonly RaidEncounter _raid;
     private readonly RaidBroadcaster _broadcaster;
     private readonly RaidRewardApplier _rewardApplier;
+    private readonly TelemetryPublisher? _telemetryPublisher;
 
     // ConcurrentDictionary<Guid, ...>: 세션 접속/해제가 여러 I/O 스레드에서 동시에 일어나므로 락 없는
     // 딕셔너리로 세션별 컨텍스트를 관리한다(사이클 1 SessionBattleRunner와 동일 근거).
@@ -93,8 +94,14 @@ public sealed class SessionRaidRunner
     /// <param name="registry">브로드캐스트 대상(접속 세션 전체)을 추적하는 레지스트리</param>
     /// <param name="raidTimeLimit">이 시간 내에 보스를 처치하지 못하면 레이드 실패(보상 없이 리셋)</param>
     /// <param name="tickInterval">세션별 제출 루프의 틱 간격. 생략 시 500ms.</param>
+    /// <param name="telemetryPublisher">
+    /// 지정하면 <see cref="RaidEncounter.RunAsync"/>의 onStep을 <see cref="RaidBroadcaster"/>와 함께
+    /// 팬아웃 구독해 웹 모니터링 대시보드용 텔레메트리 스냅샷을 브로드캐스트한다(<c>plan/web_monitoring_0718.md</c>).
+    /// 생략(null, 기본값)하면 게임 클라이언트 브로드캐스트만 동작한다(기존 동작과 100% 동일).
+    /// </param>
     public SessionRaidRunner(PlayerLevelSystem levelSystem, MonsterTable monsterTable, EquipmentTable equipmentTable,
-        GameEventSink sink, ISessionRegistry registry, TimeSpan raidTimeLimit, TimeSpan? tickInterval = null)
+        GameEventSink sink, ISessionRegistry registry, TimeSpan raidTimeLimit, TimeSpan? tickInterval = null,
+        TelemetryPublisher? telemetryPublisher = null)
     {
         ArgumentNullException.ThrowIfNull(levelSystem);
         ArgumentNullException.ThrowIfNull(monsterTable);
@@ -108,6 +115,7 @@ public sealed class SessionRaidRunner
         _tickInterval = tickInterval;
         _broadcaster = new RaidBroadcaster(registry);
         _rewardApplier = new RaidRewardApplier();
+        _telemetryPublisher = telemetryPublisher;
 
         // _boss를 별도 필드로 보관 — RaidEncounter는 boss 참조를 캡슐화(private)하므로, 세션 제출
         // 루프가 CalcFinalDamage(player, boss)로 피해를 계산하려면 이 클래스가 같은 인스턴스를
@@ -116,17 +124,38 @@ public sealed class SessionRaidRunner
         _raid = new RaidEncounter(_boss, raidTimeLimit);
     }
 
-    /// <summary>레이드 액터 루프·보상 드레인 루프·브로드캐스트 드레인 루프를 서버 수명 동안 1회 시작한다.</summary>
+    /// <summary>
+    /// 레이드 액터 루프·보상 드레인 루프·브로드캐스트 드레인 루프(+ 지정 시 텔레메트리 퍼블리시 루프)를
+    /// 서버 수명 동안 1회 시작한다.
+    /// </summary>
     /// <param name="lifetimeToken">서버 종료 시 취소되는 수명 토큰(세션별 CTS와는 무관 — 링크하지 않음)</param>
     /// <remarks>
-    /// <b>Blocking 여부:</b> Non-blocking. 세 루프 모두 <c>Task.Run</c>으로 fire-and-forget 시작한다 —
+    /// <b>Blocking 여부:</b> Non-blocking. 모든 루프를 <c>Task.Run</c>으로 fire-and-forget 시작한다 —
     /// 호출자(<c>Main.cs</c>)는 이 메서드 반환 직후 <c>listener.Start</c>로 진행할 수 있다.
+    /// <b>onStep 팬아웃:</b> <see cref="_telemetryPublisher"/>가 있으면 <see cref="RaidEncounter.RunAsync"/>에
+    /// 넘기는 onStep 콜백을 <see cref="RaidBroadcaster.OnStepAsync"/>와 <see cref="TelemetryPublisher.OnStep"/>을
+    /// 순차 <c>await</c>하는 람다로 합성한다. 둘 다 내부 채널에 <c>TryWrite</c>만 하고 즉시 반환하는
+    /// 계약(각 클래스 remarks 참고)이므로, 합성해도 액터 루프가 실질적으로 지연되지 않는다 — 텔레메트리
+    /// 없이(<see cref="_telemetryPublisher"/>가 null) 실행하면 기존과 동일하게 <c>_broadcaster.OnStepAsync</c>를
+    /// 그대로 전달해 위임 오버헤드가 없다.
     /// </remarks>
     public void Start(CancellationToken lifetimeToken)
     {
-        _ = Task.Run(() => _raid.RunAsync(_sink, lifetimeToken, _broadcaster.OnStepAsync), lifetimeToken);
+        Func<RaidStepBroadcast, CancellationToken, ValueTask> onStep = _telemetryPublisher is null
+            ? _broadcaster.OnStepAsync
+            : async (info, ct) =>
+            {
+                await _broadcaster.OnStepAsync(info, ct);
+                await _telemetryPublisher.OnStep(info, ct);
+            };
+
+        _ = Task.Run(() => _raid.RunAsync(_sink, lifetimeToken, onStep), lifetimeToken);
         _ = Task.Run(() => _rewardApplier.DrainAsync(_raid.RewardReader, lifetimeToken), lifetimeToken);
         _ = Task.Run(() => _broadcaster.DrainAsync(lifetimeToken), lifetimeToken);
+        if (_telemetryPublisher is not null)
+        {
+            _ = Task.Run(() => _telemetryPublisher.PublishLoopAsync(lifetimeToken), lifetimeToken);
+        }
     }
 
     /// <summary>접속 시 시작 장비를 착용시키고 이 세션의 보스 공격 제출 루프를 시작한다.</summary>
