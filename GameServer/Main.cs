@@ -57,9 +57,48 @@ var binder = new SessionPlayerBinder(levelSystem, sink);
 
 // HMAC 시크릿: AuthServer(AuthServerConfig.HmacSecret)와 반드시 동일한 값을 공유해야 발급된
 // 토큰을 이쪽에서 검증할 수 있다. 설정값이 이거 하나뿐이라 Port처럼 인라인으로 읽는다(별도
-// Config 클래스 없음).
-var hmacSecret = Encoding.UTF8.GetBytes(
-    Environment.GetEnvironmentVariable("IDLERPG_AUTH_HMAC_SECRET") ?? "dev-only-insecure-hmac-secret-change-me");
+// Config 클래스 없음). 코드리뷰 Critical 발견 수정
+// (docs/code-reviews/2026-07-18-auth-login-and-web-monitoring-review.md): 이전에는 환경 변수가
+// 없으면 소스에 하드코딩된(=공개 저장소에 노출된) 개발용 기본키로 조용히 폴백해, 운영에서 설정을
+// 빠뜨리면 그 알려진 키로 누구나 토큰을 위조해 인증 게이트를 완전히 우회할 수 있었다. 이제 Release
+// 빌드에서는 폴백 없이 즉시 실패(fail-fast)하고, 어떤 경로든 32바이트 미만 키는 거부한다
+// (AuthServerConfig.cs의 ResolveHmacSecret과 정책·상수를 동일하게 미러링 — 공유 상수화는 별도
+// Medium 발견, 이번 Critical/High 수정 범위 밖).
+var hmacSecret = ResolveHmacSecret();
+
+static byte[] ResolveHmacSecret()
+{
+    const int MinHmacSecretBytes = 32; // NIST SP 800-107: HMAC 키 길이는 해시 출력 크기(SHA-256=32B) 이상 권장
+    string? fromEnv = Environment.GetEnvironmentVariable("IDLERPG_AUTH_HMAC_SECRET");
+    string secretText;
+    if (fromEnv is not null)
+    {
+        secretText = fromEnv;
+    }
+    else
+    {
+#if DEBUG
+        // DEBUG 전용 폴백: 로컬 dotnet run 편의를 위해 유지하되, Release 빌드에서는 아래 #else로
+        // 완전히 배제된다(컴파일 시점에 코드 자체가 어셈블리에 남지 않음).
+        secretText = "dev-only-insecure-hmac-secret-change-me";
+#else
+        throw new InvalidOperationException(
+            "IDLERPG_AUTH_HMAC_SECRET 환경 변수가 설정되지 않았습니다. Release 빌드에서는 개발용 기본 비밀키를 " +
+            "사용할 수 없습니다 — 해당 문자열은 공개 저장소 소스에 그대로 노출되어 있어, 그 값을 그대로 쓰면 " +
+            "공격자가 AuthServer가 발급한 것처럼 유효 토큰을 위조해 인증 게이트를 완전히 우회할 수 있습니다. " +
+            "배포 전 이 환경 변수를 32바이트 이상의 고엔트로피 값으로 설정하세요.");
+#endif
+    }
+
+    byte[] secret = Encoding.UTF8.GetBytes(secretText);
+    if (secret.Length < MinHmacSecretBytes)
+    {
+        throw new InvalidOperationException(
+            $"IDLERPG_AUTH_HMAC_SECRET이 너무 짧습니다({secret.Length}바이트, 최소 {MinHmacSecretBytes}바이트 필요). " +
+            "HMAC-SHA256 키는 해시 출력 크기 이상의 엔트로피를 가져야 안전합니다.");
+    }
+    return secret;
+}
 // HmacAuthTokenCodec: 발급(IAuthTokenIssuer)도 구현하지만 GameServer는 검증(IAuthTokenValidator)만
 // 쓴다 — 토큰 발급은 AuthServer 전용 책임.
 var authGate = new SessionAuthGate(new HmacAuthTokenCodec(hmacSecret), levelSystem, sink, new BinaryPacketSerializer());

@@ -20,9 +20,11 @@ namespace AuthServer.Login;
 /// <item><description><b>Memory Allocation:</b> <see cref="BinaryPacketSerializer.Deserialize{T}"/>가
 /// <see cref="LoginRequestPacket"/> 인스턴스와 Username/Password string 2개를 힙에 할당합니다.</description></item>
 /// <item><description><b>Blocking:</b> <b>고성능 네트워크 IO 스레드 풀에서 직접 호출됩니다.</b>
-/// 내부적으로 <see cref="LoginService.AuthenticateAsync"/>를 거치며, 여기 포함된 PBKDF2 비밀번호
-/// 검증은 동기 CPU 블로킹(수십 ms급)입니다 — 로그인은 저빈도 경로이므로 이번 사이클에서는 허용하되,
-/// 처리량이 커지면 오프로드를 고려해야 합니다(§AuthServer 위험 항목 참고).</description></item>
+/// 내부적으로 <see cref="LoginService.AuthenticateAsync"/>를 거치는데, 그 안의 PBKDF2 비밀번호
+/// 검증은 동기 CPU 블로킹(수십 ms급)이지만 <c>Task.Run</c>으로 스레드 풀 워커에 오프로드되어 있어
+/// (코드리뷰 High 발견 수정, <c>docs/code-reviews/2026-07-18-auth-login-and-web-monitoring-review.md</c>)
+/// 이 메서드를 호출한 IO 스레드 자체는 그 동안 블로킹되지 않고 다른 세션의 수신을 계속 처리할 수
+/// 있습니다.</description></item>
 /// </list>
 /// </remarks>
 public sealed class AuthConnectionHandler

@@ -16,8 +16,14 @@ namespace AuthServer.Login;
 /// <item><description><b>Memory Allocation:</b> 저장소 조회 결과(<see cref="Account"/>)와 발급된
 /// 토큰 문자열 등 호출당 여러 힙 할당이 발생합니다.</description></item>
 /// <item><description><b>Blocking:</b> <see cref="AuthenticateAsync"/> 내부에서 저장소 조회는
-/// 비동기 I/O이지만, 비밀번호 해시 검증(<see cref="IPasswordHasher.Verify"/>)은 의도적으로 느린
-/// 동기 CPU 블로킹 구간을 포함합니다(§IPasswordHasher 참고).</description></item>
+/// 비동기 I/O이고, 비밀번호 해시 검증(<see cref="IPasswordHasher.Verify"/>)은 의도적으로 느린
+/// 동기 CPU 블로킹 구간(수십 ms급, §IPasswordHasher 참고)이지만 <see cref="Task.Run(Action)"/>으로
+/// 스레드 풀 워커에 오프로드해 호출자(네트워크 IO 스레드, <see cref="AuthConnectionHandler.OnReceived"/>)를
+/// 점유하지 않습니다 — 코드리뷰 High 발견 수정
+/// (<c>docs/code-reviews/2026-07-18-auth-login-and-web-monitoring-review.md</c>): 이전에는
+/// <c>OnReceived</c>가 직접 호출하는 이 메서드 안에서 <c>Verify</c>를 동기 실행해, 동시 로그인이
+/// 스레드 풀 워커 수를 넘으면 나머지 요청이 대기열에 쌓여 전체 수신 처리량이 붕괴할 수 있었다.
+/// </description></item>
 /// </list>
 /// </remarks>
 public sealed class LoginService
@@ -56,7 +62,11 @@ public sealed class LoginService
         if (account is null)
             return LoginResult.Failed();
 
-        if (!_hasher.Verify(password, account.PasswordHash))
+        // Task.Run: PBKDF2 10만회 반복(수십 ms, 동기 CPU 연산)을 스레드 풀 워커로 넘겨 호출자인
+        // 네트워크 IO 스레드(AuthConnectionHandler.OnReceived)를 즉시 반환시킨다 — 그래야 해시 계산이
+        // 끝나기 전에도 그 IO 스레드가 다른 세션의 수신을 계속 처리할 수 있다(클래스 remarks 참고).
+        bool verified = await Task.Run(() => _hasher.Verify(password, account.PasswordHash), ct);
+        if (!verified)
             return LoginResult.Failed();
 
         string token = _tokenIssuer.Issue(account.AccountId, account.Username, DateTimeOffset.UtcNow + _tokenLifetime);
