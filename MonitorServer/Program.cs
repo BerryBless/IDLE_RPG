@@ -36,6 +36,9 @@ int webPort = int.TryParse(Environment.GetEnvironmentVariable("IDLERPG_MONITOR_W
 // 대시보드 웹 서버 바인드 주소. 기본값은 루프백(기존 로컬 실행과 동일). Docker에서는
 // IDLERPG_MONITOR_WEB_BIND=0.0.0.0으로 재정의해 호스트에 publish된 포트로 접속을 받는다.
 string webBind = Environment.GetEnvironmentVariable("IDLERPG_MONITOR_WEB_BIND") ?? "127.0.0.1";
+Console.WriteLine(
+    $"[초기화] 설정 로딩 완료 - web={webBind}:{webPort}, telemetrySource={gameServerHost}:{telemetryPort}, " +
+    $"reconnectDelay={reconnectDelay.TotalSeconds:0}s");
 
 // JsonSerializerOptions(camelCase): DashboardHtml.cs의 JS가 s.bossCurrentHp처럼 camelCase 필드명을
 // 읽으므로, System.Text.Json 기본 PascalCase 대신 명시적으로 맞춰야 한다. 재사용 가능한 옵션
@@ -43,6 +46,7 @@ string webBind = Environment.GetEnvironmentVariable("IDLERPG_MONITOR_WEB_BIND") 
 var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
 var store = new TelemetrySnapshotStore();
+Console.WriteLine("[초기화] TelemetrySnapshotStore 생성 완료(아직 구독 시작 전 - 최초 스냅샷은 기본값).");
 
 // CancellationTokenSource: Ctrl+C(SIGINT) 기본 동작인 즉시 프로세스 종료 대신 협조적 취소로 바꾼다
 // (GameServer/Main.cs, AuthServer/Program.cs와 동일한 종료 패턴).
@@ -64,12 +68,14 @@ using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
 // Task.Run(fire-and-forget): 텔레메트리 재접속 루프는 웹 서버 수명 내내 백그라운드에서 독립적으로
 // 돈다 — WebApplication.Run()이 스레드를 점유하는 동안에도 계속 재접속을 시도한다.
 _ = Task.Run(() => TelemetryClientLoop.RunAsync(gameServerHost, telemetryPort, store, reconnectDelay, cts.Token), cts.Token);
+Console.WriteLine($"[초기화] 텔레메트리 재접속 루프 기동 완료 -> {gameServerHost}:{telemetryPort} 구독 시도 시작(GameServer 미기동이어도 계속 재시도).");
 
 var builder = WebApplication.CreateBuilder();
 // 콘솔 노이즈 억제: 이 프로세스는 오직 대시보드 서빙만 하므로 ASP.NET Core 기본 요청 로깅이 불필요하다
 // (GameServer가 2026-07-07 관측성 전환 이후 콘솔 직접 출력을 하지 않는 것과 같은 방향의 결정).
 builder.Logging.ClearProviders();
 var app = builder.Build();
+Console.WriteLine("[초기화] ASP.NET Core WebApplication 빌드 완료(기본 요청 로깅은 억제됨).");
 
 // GET /: 단일 페이지 대시보드 HTML을 그대로 반환한다(정적 파일 미들웨어 없이 인메모리 상수 문자열).
 app.MapGet("/", () => Results.Content(DashboardHtml.Page, "text/html; charset=utf-8"));
@@ -101,4 +107,10 @@ app.MapGet("/events", async (HttpContext ctx, CancellationToken requestAborted) 
     }
 });
 
+Console.WriteLine("[초기화] 라우트 등록 완료 (GET / 대시보드, GET /events SSE).");
+
+// Kestrel 기본 "Now listening on..." 로그는 위 ClearProviders()로 함께 꺼진다 — 여러 서버를 동시에
+// 띄울 때(run-local.bat) 어느 창인지, 어느 주소에 떠 있는지 구분할 수 있도록 대체 상태 줄을 남긴다.
+Console.WriteLine($"[가동] MonitorServer 대시보드 시작 -> http://{webBind}:{webPort} (telemetry source {gameServerHost}:{telemetryPort})");
+Console.WriteLine("[가동] MonitorServer 초기화 완료 - 모든 컴포넌트가 정상 기동되었습니다.");
 app.Run($"http://{webBind}:{webPort}");

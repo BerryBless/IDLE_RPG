@@ -47,19 +47,39 @@ int gamePort = int.TryParse(Environment.GetEnvironmentVariable("IDLERPG_GAME_POR
 int telemetryPort = int.TryParse(Environment.GetEnvironmentVariable("IDLERPG_GAME_TELEMETRY_PORT"), out var envTelemetryPort)
     ? envTelemetryPort
     : 7779; // 게임 리스너(7777)와 겹치지 않는 별도 포트 — 웹 모니터링 전용 읽기 전용 구독.
+// ConsoleStatusReporter 출력 주기(초). 0이면 완전히 비활성화 — Docker처럼 로그 드라이버가 stdout을
+// 별도로 수집·과금하는 환경에서 반복 출력 자체를 끄고 싶을 때 쓴다.
+int consoleStatusIntervalSeconds = int.TryParse(
+    Environment.GetEnvironmentVariable("IDLERPG_GAME_CONSOLE_INTERVAL_SECONDS"), out var envConsoleInterval)
+    ? envConsoleInterval
+    : 5;
 // IPAddress.Parse("127.0.0.1")는 IPAddress.Loopback과 동일값이므로 기본 동작은 이전과 같다.
 // Docker에서는 IDLERPG_GAME_BIND=0.0.0.0으로 재정의해 컨테이너 밖(다른 서비스)에서 접속을 받는다.
 var bindAddress = IPAddress.Parse(Environment.GetEnvironmentVariable("IDLERPG_GAME_BIND") ?? "127.0.0.1");
 var raidTimeLimit = TimeSpan.FromSeconds(60); // 이 시간 내에 전원이 힘을 모아 보스를 잡아야 한다.
+Console.WriteLine(
+    $"[초기화] 설정 로딩 완료 - game={bindAddress}:{gamePort}, telemetry={bindAddress}:{telemetryPort}, " +
+    $"raidTimeLimit={raidTimeLimit.TotalSeconds:0}s, consoleStatusInterval=" +
+    (consoleStatusIntervalSeconds > 0 ? $"{consoleStatusIntervalSeconds}s" : "disabled"));
 
 var levelSystem = PlayerLevelSystem.CreateDefault();
 var monsterTable = MonsterTable.CreateDefault();
 var equipmentTable = EquipmentTable.CreateDefault();
+Console.WriteLine("[초기화] 레벨/몬스터/장비 테이블 로드 완료.");
 
 // GameEventSink: 다수 I/O 스레드(생산자)가 Record*로 메트릭+NDJSON 라인을 밀어넣고, 내부 단일
-// 소비자 태스크가 파일에 flush한다. 2026-07-07 관측성 전환 이후 Main.cs는 콘솔에 직접 출력하지
-// 않는다 — 이 규칙은 네트워크 서버로 전환한 뒤에도 그대로 유지한다.
-await using var sink = GameEventSink.CreateFile(Path.Combine("logs", "game-events.ndjson"));
+// 소비자 태스크가 파일에 flush한다. 2026-07-07 관측성 전환 이후 게임 "이벤트"(접속/해제/보상 등
+// 런타임 중 반복되는 사건)는 콘솔이 아닌 이 sink로만 기록한다는 정책은 지금도 유지된다.
+// 2026-07-19/20: 여기에 별개로 두 가지를 콘솔에 남긴다 — (1) 아래 곳곳의 "[초기화]"/"[가동]"
+// Console.WriteLine은 기동 시퀀스를 1회성으로만 상세히 보여주는 것(run-local.bat으로 여러 서버를
+// 동시에 띄울 때 어느 창이 어느 단계까지 진행됐는지 눈으로 바로 확인하기 위함), (2)
+// ConsoleStatusReporter는 sink의 누적 카운터를 5초 주기로 스냅샷/차분해 집계된 런타임 상태 한 줄만
+// 반복 출력한다(아래 consoleStatusIntervalSeconds 사용부 참고). 둘 다 "이벤트 스트림 자체를 매건
+// 콘솔로 되돌리는" 것과는 다르다 — 전자는 기동 중 유한 횟수만 찍히고, 후자는 출력 빈도가 이벤트
+// 발생량과 무관하게 주기로 상한이 걸린다.
+var eventLogPath = Path.Combine("logs", "game-events.ndjson");
+await using var sink = GameEventSink.CreateFile(eventLogPath);
+Console.WriteLine($"[초기화] 이벤트 싱크 생성 완료 -> {eventLogPath} (게임 이벤트 상세는 콘솔이 아닌 이 파일에 NDJSON으로 기록됨)");
 
 // SessionPlayerBinder: 이제 OnConnected는 배선하지 않는다(SessionAuthGate가 대체) — 연결
 // 해제/오류 시 sink에 기록하는 OnDisconnected/OnError만 계속 사용한다.
@@ -75,6 +95,7 @@ var binder = new SessionPlayerBinder(levelSystem, sink);
 // (AuthServerConfig.cs의 ResolveHmacSecret과 정책·상수를 동일하게 미러링 — 공유 상수화는 별도
 // Medium 발견, 이번 Critical/High 수정 범위 밖).
 var hmacSecret = ResolveHmacSecret();
+Console.WriteLine("[초기화] HMAC 토큰 검증 키 로드 완료.");
 
 static byte[] ResolveHmacSecret()
 {
@@ -90,6 +111,9 @@ static byte[] ResolveHmacSecret()
 #if DEBUG
         // DEBUG 전용 폴백: 로컬 dotnet run 편의를 위해 유지하되, Release 빌드에서는 아래 #else로
         // 완전히 배제된다(컴파일 시점에 코드 자체가 어셈블리에 남지 않음).
+        Console.WriteLine(
+            "[경고] IDLERPG_AUTH_HMAC_SECRET 환경 변수가 없어 개발용 기본 비밀키를 사용합니다. " +
+            "AuthServer도 동일한 값을 써야 발급된 토큰이 검증됩니다(AuthServer/Program.cs 경고 참고).");
         secretText = "dev-only-insecure-hmac-secret-change-me";
 #else
         throw new InvalidOperationException(
@@ -112,6 +136,7 @@ static byte[] ResolveHmacSecret()
 // HmacAuthTokenCodec: 발급(IAuthTokenIssuer)도 구현하지만 GameServer는 검증(IAuthTokenValidator)만
 // 쓴다 — 토큰 발급은 AuthServer 전용 책임.
 var authGate = new SessionAuthGate(new HmacAuthTokenCodec(hmacSecret), levelSystem, sink, new BinaryPacketSerializer());
+Console.WriteLine("[초기화] 세션 인증 게이트(SessionAuthGate) 생성 완료.");
 
 // ServerNet.CreateSessionRegistry(): 공유 보스 co-op는 보스 HP/처치를 접속한 모든 세션에
 // 브로드캐스트해야 하므로(1단계와 달리 특정 세션 하나에게만 보내는 것으로는 부족) 세션 레지스트리가
@@ -131,6 +156,7 @@ IServerListener listener = ServerNet.CreateListener(registry);
 // 텔레메트리 리스너: 게임 리스너와 별개의 IServerListener 인스턴스. OnReceived를 배선하지 않으므로
 // 모니터 프로세스가 무언가를 보내도 조용히 무시된다(읽기 전용 구독 전용 — 게임 프로토콜과 무관).
 IServerListener telemetryListener = ServerNet.CreateListener(telemetryRegistry);
+Console.WriteLine("[초기화] 세션 레지스트리 2개 + 리스너 2개 생성 완료(아직 포트를 열지는 않음).");
 
 // TelemetryPublisher: RaidEncounter의 onStep을 SessionRaidRunner가 RaidBroadcaster와 함께 팬아웃
 // 구독하도록 아래 raidRunner 생성자에 주입한다. 게임 리스너(listener)의 ActiveSessionCount/IsRunning/
@@ -143,6 +169,7 @@ var telemetryPublisher = new TelemetryPublisher(listener, telemetryRegistry);
 // 함께 주입해 같은 onStep 스트림을 웹 모니터링 대시보드로도 팬아웃한다.
 var raidRunner = new SessionRaidRunner(levelSystem, monsterTable, equipmentTable, sink, registry, raidTimeLimit,
     telemetryPublisher: telemetryPublisher);
+Console.WriteLine("[초기화] 텔레메트리 퍼블리셔 + 공유 레이드 러너(SessionRaidRunner) 생성 완료.");
 
 // CancellationTokenSource: Ctrl+C(SIGINT) 기본 동작인 즉시 프로세스 종료 대신, 협조적 취소로
 // 바꾼다 — sink는 await using으로 선언돼 있어 프로세스가 강제 종료되면 NDJSON 파일의 마지막
@@ -168,6 +195,7 @@ using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
 // 레이드 액터 루프 + 보상 드레인 루프 + 브로드캐스트 드레인 루프 + 텔레메트리 퍼블리시 루프를 먼저
 // 기동한 뒤 리스너를 연다 — 첫 접속이 들어오기 전에 SubmitDamage를 받을 준비가 되어 있어야 한다.
 raidRunner.Start(cts.Token);
+Console.WriteLine("[초기화] 레이드 액터 루프 + 보상/브로드캐스트 드레인 루프 + 텔레메트리 퍼블리시 루프 기동 완료.");
 
 // SessionSendTimeout: 코드리뷰 발견(docs/code-reviews/2026-07-08-shared-boss-raid-coop-review.md,
 // 보안 Medium/CWE-400) 수정 — 미설정(기본 null=무한 대기) 상태였다면 수신 버퍼를 비우지 않는
@@ -215,9 +243,28 @@ listener.OnClientError = binder.OnError;
 // (TLS 미도입) IPAddress.Any로 외부에 노출하기엔 이르다. TLS 도입 후 재검토한다. Docker 컨테이너
 // 내부망처럼 신뢰 경계가 다른 환경에서는 IDLERPG_GAME_BIND=0.0.0.0으로 명시적으로만 넓힌다.
 listener.Start(gamePort, bindAddress);
+Console.WriteLine($"[가동] 게임 리스너 시작 -> {bindAddress}:{gamePort} (클라이언트 접속 수락 시작)");
 // 텔레메트리 리스너도 같은 bindAddress를 쓴다 — 인증 게이트가 없는 읽기 전용 리스너라 외부(호스트) 노출은
 // 더더욱 이르므로, 컨테이너 환경에서도 docker-compose가 이 포트를 host에 publish하지 않아야 한다.
 telemetryListener.Start(telemetryPort, bindAddress);
+Console.WriteLine($"[가동] 텔레메트리 리스너 시작 -> {bindAddress}:{telemetryPort} (MonitorServer 구독용, 인증 없음)");
+
+// ConsoleStatusReporter: GameEventSink에 이미 누적된 카운터를 5초 주기로 스냅샷/차분만 하므로
+// Record* 호출부(hot path)에는 전혀 관여하지 않는다 — 콘솔 I/O는 이 백그라운드 루프 하나에서만
+// 발생한다(클래스 remarks 참고). Fire-and-forget: cts.Token이 취소되면 루프가 스스로 정리된다.
+if (consoleStatusIntervalSeconds > 0)
+{
+    var consoleReporter = new ConsoleStatusReporter(listener, sink, Console.Out,
+        interval: TimeSpan.FromSeconds(consoleStatusIntervalSeconds));
+    _ = consoleReporter.Start(cts.Token);
+    Console.WriteLine($"[가동] 콘솔 상태 리포터 시작 (주기 {consoleStatusIntervalSeconds}s, 유휴 heartbeat 60s).");
+}
+else
+{
+    Console.WriteLine("[가동] 콘솔 상태 리포터 비활성화됨(IDLERPG_GAME_CONSOLE_INTERVAL_SECONDS=0).");
+}
+
+Console.WriteLine("[가동] GameServer 초기화 완료 - 모든 루프/리스너가 정상 기동되었습니다.");
 
 try
 {

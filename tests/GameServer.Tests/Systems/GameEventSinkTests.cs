@@ -145,4 +145,46 @@ public class GameEventSinkTests
 
         Assert.Equal(1, sum);
     }
+
+    [Fact]
+    public void SnapshotCounts_ReflectsAccumulatedCallsAcrossAllEventTypes()
+    {
+        using var stringWriter = new StringWriter();
+        var sink = new GameEventSink(stringWriter, new GameMetrics($"Test.GameEventSink.{Guid.NewGuid()}"));
+
+        sink.RecordPlayerConnected("player-0001", 1);
+        sink.RecordPlayerConnected("player-0002", 1);
+        sink.RecordPlayerDisconnected("player-0001");
+        sink.RecordPlayerConnectionError("player-0002", new InvalidOperationException("boom"));
+        sink.RecordRaidBossDefeated(2);
+        sink.RecordRaidFailed();
+        sink.RecordMonsterDefeated("player-0002", 1, 6, 8);
+        sink.RecordPlayerDefeated("player-0002");
+        sink.RecordTickException("player-0002", new InvalidOperationException("tick"));
+        sink.RecordRaidBossHpPercent(42.5, 3);
+
+        var counts = sink.SnapshotCounts();
+
+        Assert.Equal(2, counts.PlayerConnected);
+        Assert.Equal(1, counts.PlayerDisconnected);
+        Assert.Equal(1, counts.PlayerConnectionErrors);
+        Assert.Equal(1, counts.RaidBossDefeated);
+        Assert.Equal(1, counts.RaidFailed);
+        Assert.Equal(1, counts.MonsterDefeated);
+        Assert.Equal(1, counts.PlayerDefeated);
+        Assert.Equal(1, counts.TickExceptions);
+        Assert.Equal(42.5, counts.LastBossHpPercent);
+        Assert.Equal(3, counts.LastBossGeneration);
+    }
+
+    [Fact]
+    public void SnapshotCounts_BeforeAnyRecordCalls_IsAllZero()
+    {
+        using var stringWriter = new StringWriter();
+        var sink = new GameEventSink(stringWriter, new GameMetrics($"Test.GameEventSink.{Guid.NewGuid()}"));
+
+        var counts = sink.SnapshotCounts();
+
+        Assert.Equal(default, counts);
+    }
 }

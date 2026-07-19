@@ -7,11 +7,18 @@
 # 도달 가능해야 텔레메트리 무인증 리스너와 DB가 외부에 노출되지 않는다.
 #
 # 실행: up.bat(빌드+기동) / down.bat(정지) / logs.bat(로그 추적) / seed.bat(더미 계정 3000개 시딩).
+#
+# restart: "no" — 크래시가 나도 Docker가 자동으로 재시작하지 않는다(의도적 선택, 2026-07-19).
+# 처음엔 restart: always로 뒀으나, 설정 오류(예: .env의 HMAC 시크릿 손상) 같은 문제가 있으면
+# 무한 크래시 루프로 CPU/로그만 계속 소모하며 문제가 표면화되지 않는 부작용이 있어 되돌렸다.
+# 크래시가 나면 컨테이너는 멈춘 채로 남고 `docker compose ps`에 Exited로 명확히 보이므로, 원인을
+# 고친 뒤 up.bat으로 다시 올린다. 대신 이 정책은 호스트/Docker 재부팅 후에도 자동으로 다시 뜨지
+# 않는다 — 재부팅 후 다시 올리려면 up.bat을 한 번 더 실행해야 한다(plan/docker_compose_0719.md 참고).
 
 services:
   mongo:
     image: mongo:7
-    restart: unless-stopped
+    restart: "no"
     volumes:
       - mongo-data:/data/db
     networks: [idlerpg-net]
@@ -31,7 +38,7 @@ services:
       args:
         PROJECT: AuthServer
         RUNTIME_IMAGE: mcr.microsoft.com/dotnet/runtime:10.0
-    restart: unless-stopped
+    restart: "no"
     environment:
       IDLERPG_AUTH_BIND: 0.0.0.0
       IDLERPG_AUTH_PORT: "7778"
@@ -53,7 +60,7 @@ services:
       args:
         PROJECT: GameServer
         RUNTIME_IMAGE: mcr.microsoft.com/dotnet/runtime:10.0
-    restart: unless-stopped
+    restart: "no"
     environment:
       IDLERPG_GAME_BIND: 0.0.0.0
       IDLERPG_GAME_PORT: "7777"
@@ -71,7 +78,7 @@ services:
       args:
         PROJECT: MonitorServer
         RUNTIME_IMAGE: mcr.microsoft.com/dotnet/aspnet:10.0 # Microsoft.NET.Sdk.Web(ASP.NET Core) 필요.
-    restart: unless-stopped
+    restart: "no"
     environment:
       IDLERPG_MONITOR_WEB_BIND: 0.0.0.0
       IDLERPG_MONITOR_WEB_PORT: "8080"

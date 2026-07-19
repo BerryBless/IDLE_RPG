@@ -295,7 +295,7 @@ public sealed class RaidEncounter
                 var deadlineStep = CheckDeadline(_clock()); // 처치 직후라면 위에서 이미 데드라인이 재시작된 뒤라 안전
                 await EmitAndBroadcastAsync(deadlineStep);
 
-                sink.RecordRaidBossHpPercent(BossHpPercent());
+                sink.RecordRaidBossHpPercent(BossHpPercent(), _generation);
             }
         }
         catch (OperationCanceledException)

@@ -117,6 +117,39 @@ docker compose exec mongo mongosh --eval "db.getSiblingDB('idlerpg').accounts.co
 
 모든 항목 실측 확인 완료(2026-07-19).
 
+## 7-1. 2026-07-19 추가: 재시작 정책 결정 경위 (`unless-stopped` → `always` → `"no"`)
+
+"서버를 끄지 말고 무한으로 유지되게" 요청에 따라 처음엔 4서비스 전부 `restart: unless-stopped` →
+`restart: always`로 바꿨다. 검증 중 `.bat` 인코딩을 진단하던 `cmd.exe` 호출 인자가 깨지면서 의도치
+않게 `.env`의 `IDLERPG_AUTH_HMAC_SECRET` 값이 2바이트(`LO`)로 손상되는 사고가 발생했고,
+`restart: always`가 이 손상된 값으로 무한 크래시 루프(`RestartCount=8`, exit 139)를 계속 재시도하고
+있는 것을 발견했다 — 정책 자체는 정직하게 작동했지만, 설정 오류가 있으면 문제를 감춘 채 CPU/로그만
+계속 소모하는 부작용이 드러났다.
+
+이 부작용을 겪은 뒤 "크래시는 자동복구 하지마" 요청에 따라 최종적으로 4서비스 전부
+**`restart: "no"`**로 변경했다(YAML에서 `no`는 따옴표 없이 쓰면 boolean으로 파싱될 수 있어 명시적으로
+문자열 인용). 크래시가 나면 컨테이너는 `Exited` 상태로 멈춘 채 남고, 원인을 고친 뒤 `up.bat`으로
+수동으로 다시 올려야 한다. 대신 이 정책은 호스트/Docker 재부팅 후에도 자동으로 다시 뜨지 않는다 —
+애초 "무한 유지" 요청보다 "크래시는 조용히 재시도하지 말고 드러나게"가 최종 우선순위였다.
+
+**최종 정책 실측 검증:** `docker compose run` 원샷 컨테이너에 `IDLERPG_AUTH_HMAC_SECRET=short`(고의
+오류값)를 주입해 실제 fail-fast 크래시(exit 139)를 재현 — `RestartPolicy={"Name":"no",...}`인 상태로
+8초 이상 대기해도 `RestartCount=0`, `Status=exited`를 계속 유지함을 확인(자동 재시작 없음).
+(참고: 이 과정에서 `docker exec ... kill -9 1`로 컨테이너 내부 PID 1을 직접 죽이는 방식은 이
+샌드박스 환경에서 신호가 제대로 전달되지 않아 신뢰할 수 없는 테스트 방법이었다 — 대신 실제 앱
+레벨 예외로 크래시를 재현하는 방식으로 검증했다.)
+
+## 7-2. 2026-07-19 추가: `.bat` 스크립트는 반드시 ASCII만 사용
+
+최초 버전은 `up.bat`/`down.bat`/`logs.bat`/`seed.bat`의 안내 메시지를 한글(UTF-8)로 작성했는데,
+사용자가 더블클릭하자 `docker compose build`가 `uild`/`ho`/`compose` 같은 조각으로 쪼개져 "명령을
+찾을 수 없다"는 오류가 났다. 원인: `cmd.exe`는 콘솔 코드페이지가 기본적으로 한국어 Windows에서도
+CP949(EUC-KR 계열)이고, 파일이 UTF-8(비 BOM)로 저장돼 있으면 멀티바이트 한글 시퀀스를 CP949로
+잘못 해석해 바이트 정렬이 깨지고, 그 여파로 뒤따르는 영문 명령어 토큰까지 쪼개진다. `chcp 65001`로
+콘솔 코드페이지를 UTF-8로 바꾸는 방법도 있지만 신뢰성이 낮아, 대신 4개 `.bat` 파일의 모든 텍스트를
+순수 ASCII(영문)로 다시 작성해 코드페이지 문제 자체를 원천 차단했다(바이트 단위로 non-ASCII 0개
+확인). **이 프로젝트에서 `.bat` 파일을 새로 만들거나 수정할 때는 절대 한글을 넣지 말 것.**
+
 ## 7. 향후 확장 포인트
 
 - TLS 미도입 상태이므로 telemetry·mongo 미publish로 방어하고 있다. TLS 도입 후에는 바인드

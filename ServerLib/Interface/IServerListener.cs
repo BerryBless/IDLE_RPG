@@ -20,7 +20,7 @@ public interface IServerListener
     /// 서버 리스너가 현재 accept 루프를 구동 중인지 나타냅니다.
     /// </summary>
     /// <remarks>
-    /// <b>[Thread Safety:]</b> Thread-safe. <see cref="Start"/>와 <see cref="Stop"/> 사이의 상태를 반영합니다.
+    /// <b>[Thread Safety:]</b> Thread-safe. <see cref="Start(int)"/>와 <see cref="Stop"/> 사이의 상태를 반영합니다.
     /// </remarks>
     bool IsRunning { get; }
 
@@ -35,7 +35,7 @@ public interface IServerListener
     /// <br/><br/>
     /// <b>[Guarantee:]</b> <see cref="OnClientDisconnected"/>보다 항상 먼저 발화됩니다.
     /// <br/><br/>
-    /// <b>[설정 시점:]</b> <see cref="Start"/>() 호출 전에만 설정 가능하며, 이후 설정 시 <see cref="InvalidOperationException"/>이 발생합니다.
+    /// <b>[설정 시점:]</b> <see cref="Start(int)"/> 호출 전에만 설정 가능하며, 이후 설정 시 <see cref="InvalidOperationException"/>이 발생합니다.
     /// </remarks>
     Func<ISession, ValueTask>? OnClientConnected { get; set; }
 
@@ -48,7 +48,7 @@ public interface IServerListener
     /// <b>[Guarantee:]</b> 세션당 정확히 1회 호출됩니다. 이 콜백 반환 후 <see cref="ISession"/>은 해제됩니다.
     /// 콜백 내부에서 세션 참조를 캐싱한 경우 반드시 제거해야 합니다.
     /// <br/><br/>
-    /// <b>[설정 시점:]</b> <see cref="Start"/>() 호출 전에만 설정 가능하며, 이후 설정 시 <see cref="InvalidOperationException"/>이 발생합니다.
+    /// <b>[설정 시점:]</b> <see cref="Start(int)"/> 호출 전에만 설정 가능하며, 이후 설정 시 <see cref="InvalidOperationException"/>이 발생합니다.
     /// </remarks>
     Func<ISession, ValueTask>? OnClientDisconnected { get; set; }
 
@@ -64,7 +64,7 @@ public interface IServerListener
     /// <br/><br/>
     /// <b>[Guarantee:]</b> 에러 종료 경로에서만, 세션당 최대 1회 발화합니다. 정상 종료 경로에서는 호출되지 않습니다.
     /// <br/><br/>
-    /// <b>[설정 시점:]</b> <see cref="Start"/>() 호출 전에만 설정 가능하며, 이후 설정 시 <see cref="InvalidOperationException"/>이 발생합니다.
+    /// <b>[설정 시점:]</b> <see cref="Start(int)"/> 호출 전에만 설정 가능하며, 이후 설정 시 <see cref="InvalidOperationException"/>이 발생합니다.
     /// </remarks>
     Func<ISession, Exception, ValueTask>? OnClientError { get; set; }
 
@@ -81,7 +81,7 @@ public interface IServerListener
     /// <br/><br/>
     /// <b>[Memory Allocation:]</b> 단일 세그먼트 수신 시 Zero-allocation 보장.
     /// <br/><br/>
-    /// <b>[설정 시점:]</b> <see cref="Start"/>() 호출 전에만 설정 가능하며, 이후 설정 시 <see cref="InvalidOperationException"/>이 발생합니다.
+    /// <b>[설정 시점:]</b> <see cref="Start(int)"/> 호출 전에만 설정 가능하며, 이후 설정 시 <see cref="InvalidOperationException"/>이 발생합니다.
     /// </remarks>
     Func<ISession, ReadOnlyMemory<byte>, ValueTask>? OnReceived { get; set; }
 
@@ -91,7 +91,7 @@ public interface IServerListener
     /// <remarks>
     /// <b>[성능 및 동시성 제약 조건]</b>
     /// <list type="bullet">
-    /// <item><description><b>Thread Safety:</b> Not thread-safe. <see cref="Start"/>() 호출 전에 설정해야 합니다.
+    /// <item><description><b>Thread Safety:</b> Not thread-safe. <see cref="Start(int)"/> 호출 전에 설정해야 합니다.
     /// Start() 이후 변경 시 <see cref="InvalidOperationException"/>이 발생합니다.</description></item>
     /// <item><description><b>Blocking:</b> Non-blocking.</description></item>
     /// <item><description><b>Memory Allocation:</b> Zero-allocation.</description></item>
@@ -114,7 +114,7 @@ public interface IServerListener
     /// <item><description><b>Thread Context:</b> 스윕 루프 내부 스레드에서 호출됩니다. 동기 블로킹 금지.</description></item>
     /// <item><description><b>Memory Allocation:</b> Zero-allocation.</description></item>
     /// <item><description><b>Blocking:</b> Non-blocking.</description></item>
-    /// <item><description><b>설정 시점:</b> <see cref="Start"/>() 호출 전에만 설정 가능; 이후 <see cref="InvalidOperationException"/>.</description></item>
+    /// <item><description><b>설정 시점:</b> <see cref="Start(int)"/> 호출 전에만 설정 가능; 이후 <see cref="InvalidOperationException"/>.</description></item>
     /// </list>
     /// </remarks>
     Func<ISession, ValueTask>? OnIdleTimeout { get; set; }
@@ -128,7 +128,7 @@ public interface IServerListener
     /// <br/><br/>
     /// <b>[보안 주의:]</b> <see langword="null"/>로 두면 단일 클라이언트가 수만 연결로 서버를 고갈시킬 수 있습니다. 프로덕션에서는 반드시 설정하십시오.
     /// <br/><br/>
-    /// <b>[설정 시점:]</b> <see cref="Start"/>() 호출 전에만 설정 가능합니다.
+    /// <b>[설정 시점:]</b> <see cref="Start(int)"/> 호출 전에만 설정 가능합니다.
     /// </remarks>
     int? MaxConnections { get; set; }
 
@@ -142,7 +142,7 @@ public interface IServerListener
     /// <b>[범위 한계:]</b> 동시 연결 수 제한이며, 초당 연결/패킷 <b>속도 제한(rate limiting)은 포함하지 않습니다</b>.
     /// 속도 기반 방어가 필요하면 네트워크 계층(LB·방화벽·WAF)에서 보완하십시오.
     /// <br/><br/>
-    /// <b>[설정 시점:]</b> <see cref="Start"/>() 호출 전에만 설정 가능합니다.
+    /// <b>[설정 시점:]</b> <see cref="Start(int)"/> 호출 전에만 설정 가능합니다.
     /// </remarks>
     int? MaxConnectionsPerIp { get; set; }
 
@@ -167,7 +167,7 @@ public interface IServerListener
     /// <br/><br/>
     /// <b>[성능 및 동시성 제약 조건]</b>
     /// <list type="bullet">
-    /// <item><description><b>Thread Safety:</b> Not thread-safe. <see cref="Start"/>() 호출 전에 설정하는 것을 권장합니다.</description></item>
+    /// <item><description><b>Thread Safety:</b> Not thread-safe. <see cref="Start(int)"/> 호출 전에 설정하는 것을 권장합니다.</description></item>
     /// <item><description><b>Memory Allocation:</b> Zero-allocation.</description></item>
     /// <item><description><b>Blocking:</b> Non-blocking.</description></item>
     /// </list>

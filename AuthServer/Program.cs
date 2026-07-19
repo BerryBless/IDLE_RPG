@@ -19,6 +19,10 @@ using ServerLib.Interface;
 // 이번 사이클 범위: 로그인·토큰 발급 + 3000 더미 계정 시딩까지. GameServer가 AuthTokenPacket으로
 // 이 토큰을 실제로 검증해 인증 게이트를 통과시키는 배선은 다음 사이클 과제다(Main.cs는 아직 미변경).
 
+Console.WriteLine(
+    $"[초기화] 설정 로딩 완료 - bind={AuthServerConfig.BindAddress}:{AuthServerConfig.Port}, " +
+    $"mongo={AuthServerConfig.MongoConnectionString}/{AuthServerConfig.MongoDatabaseName}");
+
 if (AuthServerConfig.IsUsingDevHmacSecret)
 {
     Console.WriteLine(
@@ -28,6 +32,7 @@ if (AuthServerConfig.IsUsingDevHmacSecret)
 
 var mongoRepo = new MongoAccountRepository(AuthServerConfig.MongoConnectionString, AuthServerConfig.MongoDatabaseName);
 var hasher = new Pbkdf2PasswordHasher();
+Console.WriteLine("[초기화] MongoAccountRepository + Pbkdf2PasswordHasher 생성 완료(아직 연결 시도는 하지 않음).");
 
 // --seed: 실 MongoDB에 결정적 더미 계정을 채우고 종료한다. 테스트(AccountCorrectnessTests)가
 // 인메모리 페이크에 대해 검증한 것과 동일한 AccountSeeder 로직을 재사용하므로 사람이 실제로
@@ -41,6 +46,7 @@ if (args.Contains("--seed"))
 var codec = new HmacAuthTokenCodec(AuthServerConfig.HmacSecret);
 var login = new LoginService(mongoRepo, hasher, codec, AuthServerConfig.TokenLifetime);
 var handler = new AuthConnectionHandler(login, new BinaryPacketSerializer());
+Console.WriteLine($"[초기화] 토큰 코덱 + 로그인 서비스 + 연결 핸들러 생성 완료(토큰 유효기간 {AuthServerConfig.TokenLifetime.TotalMinutes:0}분).");
 
 // CancellationTokenSource: Ctrl+C(SIGINT) 기본 동작인 즉시 프로세스 종료 대신 협조적 취소로
 // 바꾼다 — GameServer/Main.cs와 동일한 종료 패턴.
@@ -60,17 +66,20 @@ using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
 });
 
 IServerListener listener = ServerNet.CreateListener();
+Console.WriteLine("[초기화] 리스너 생성 완료(아직 포트를 열지는 않음).");
 // OnReceived는 Start() 호출 전에 배선해야 한다(이후 설정 시 InvalidOperationException).
 listener.OnReceived = handler.OnReceived;
 // SessionSendTimeout: 응답을 받지 않는 정지된 클라이언트 하나가 송신을 무한 대기시키지 않도록
 // 유한값으로 설정(GameServer의 공유 보스 co-op 코드리뷰에서 발견된 동일 위험 사전 반영).
 listener.SessionSendTimeout = TimeSpan.FromSeconds(2);
+Console.WriteLine("[초기화] OnReceived 핸들러 배선 + SessionSendTimeout(2s) 설정 완료.");
 
 // AuthServerConfig.BindAddress 기본값은 루프백: LoginRequestPacket.Password는 평문 전송이라(패킷
 // 주석 참고) TLS 없이 외부에 노출하면 위험하다. TLS가 도입되기 전까지 GameServer와 동일하게 루프백을
 // 기본값으로 유지하고, Docker 등 신뢰 경계가 다른 환경에서는 IDLERPG_AUTH_BIND로 명시적으로만 넓힌다.
 listener.Start(AuthServerConfig.Port, AuthServerConfig.BindAddress);
-Console.WriteLine($"AuthServer listening on {AuthServerConfig.BindAddress}:{AuthServerConfig.Port}");
+Console.WriteLine($"[가동] AuthServer 리스너 시작 -> {AuthServerConfig.BindAddress}:{AuthServerConfig.Port} (로그인 요청 수락 시작)");
+Console.WriteLine("[가동] AuthServer 초기화 완료 - 모든 컴포넌트가 정상 기동되었습니다.");
 
 try
 {

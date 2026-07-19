@@ -21,6 +21,22 @@ internal partial class GameEventJsonContext : JsonSerializerContext
 {
 }
 
+/// <summary><see cref="GameEventSink.SnapshotCounts"/>가 반환하는 누적 이벤트 카운터 + 마지막 보스
+/// HP%/세대의 스냅샷입니다. 콘솔 상태 리포터(<see cref="ConsoleStatusReporter"/>)가 주기적으로 두 스냅샷을
+/// 비교해 델타를 계산하는 용도로 쓰입니다 — NDJSON 파일이나 <see cref="GameMetrics"/>(dotnet-counters
+/// 전용, 프로세스 내부에서 읽을 수 없음)를 대체하지 않습니다.</summary>
+public readonly record struct GameEventCounts(
+    long PlayerConnected,
+    long PlayerDisconnected,
+    long PlayerConnectionErrors,
+    long RaidBossDefeated,
+    long RaidFailed,
+    long MonsterDefeated,
+    long PlayerDefeated,
+    long TickExceptions,
+    double LastBossHpPercent,
+    int LastBossGeneration);
+
 /// <summary>메트릭 갱신 + NDJSON 파일 기록을 통합한 이벤트 싱크.</summary>
 /// <remarks>
 /// <b>[성능 및 동시성 제약 조건]</b>
@@ -44,6 +60,26 @@ public sealed class GameEventSink : IAsyncDisposable
     private readonly bool _ownsWriter;
     private readonly GameMetrics _metrics;
     private readonly Task _consumerTask;
+
+    // long + Interlocked.Increment/Read: GameMetrics(System.Diagnostics.Metrics)의 Counter<long>는
+    // dotnet-counters 같은 외부 프로세스가 pull로만 구독 가능하고 이 프로세스 안에서는 값을 읽을 수
+    // 없다. ConsoleStatusReporter가 5초 주기로 "지난 구간에 몇 건 있었는지" 델타를 계산하려면 프로세스
+    // 내부에서 읽을 수 있는 누적치가 별도로 필요해, Interlocked 카운터를 여기 나란히 둔다. Increment는
+    // lock-free CAS 루프라 다수 샤드/레이드 스레드가 동시에 호출해도 컨텐션 없이 원자적으로 누적된다.
+    private long _playerConnectedTotal;
+    private long _playerDisconnectedTotal;
+    private long _playerConnectionErrorTotal;
+    private long _raidBossDefeatedTotal;
+    private long _raidFailedTotal;
+    private long _monsterDefeatedTotal;
+    private long _playerDefeatedTotal;
+    private long _tickExceptionTotal;
+
+    // double/int + Volatile.Write/Read: 보스 HP%·세대는 "가장 최근 값 하나"만 표시하면 되는 단순 상태라
+    // CAS 기반 Interlocked.Increment는 필요 없다 — 컴파일러/CPU의 재정렬로 다른 스레드가 절반만 갱신된
+    // 값을 보는 것만 막으면 충분하므로, 더 가벼운 메모리 배리어만 세우는 Volatile.Read/Write를 쓴다.
+    private double _lastBossHpPercent;
+    private int _lastBossGeneration;
 
     /// <summary>임의의 <see cref="TextWriter"/>로 싱크를 만든다. 테스트에서는 <see cref="StringWriter"/>나
     /// <see cref="TextWriter.Null"/>로 실제 파일 I/O 없이 사용할 수 있다.</summary>
@@ -138,6 +174,7 @@ public sealed class GameEventSink : IAsyncDisposable
     public void RecordMonsterDefeated(string playerId, int level, BigNumber exp, BigNumber gold)
     {
         _metrics.MonsterDefeated();
+        Interlocked.Increment(ref _monsterDefeatedTotal);
         _lineChannel.Writer.TryWrite(MonsterDefeatedLine(DateTime.UtcNow, playerId, level, exp, gold));
     }
 
@@ -145,6 +182,7 @@ public sealed class GameEventSink : IAsyncDisposable
     public void RecordPlayerDefeated(string playerId)
     {
         _metrics.PlayerDefeated();
+        Interlocked.Increment(ref _playerDefeatedTotal);
         _lineChannel.Writer.TryWrite(PlayerDefeatedLine(DateTime.UtcNow, playerId));
     }
 
@@ -152,6 +190,7 @@ public sealed class GameEventSink : IAsyncDisposable
     public void RecordRaidBossDefeated(int contributorCount)
     {
         _metrics.RaidBossDefeated();
+        Interlocked.Increment(ref _raidBossDefeatedTotal);
         _lineChannel.Writer.TryWrite(RaidBossDefeatedLine(DateTime.UtcNow, contributorCount));
     }
 
@@ -159,6 +198,7 @@ public sealed class GameEventSink : IAsyncDisposable
     public void RecordRaidFailed()
     {
         _metrics.RaidFailed();
+        Interlocked.Increment(ref _raidFailedTotal);
         _lineChannel.Writer.TryWrite(RaidFailedLine(DateTime.UtcNow));
     }
 
@@ -166,16 +206,26 @@ public sealed class GameEventSink : IAsyncDisposable
     public void RecordTickException(string playerId, Exception exception)
     {
         _metrics.TickException();
+        Interlocked.Increment(ref _tickExceptionTotal);
         _lineChannel.Writer.TryWrite(TickExceptionLine(DateTime.UtcNow, playerId, exception.Message));
     }
 
-    /// <summary>레이드 보스 현재 HP 비율을 게이지에 기록한다. 연속 상태라 NDJSON 라인은 남기지 않는다.</summary>
-    public void RecordRaidBossHpPercent(double percent) => _metrics.RaidBossHpPercent(percent);
+    /// <summary>레이드 보스 현재 HP 비율과 세대를 기록한다. 연속 상태라 NDJSON 라인은 남기지 않고,
+    /// 게이지(<see cref="GameMetrics"/>)와 <see cref="SnapshotCounts"/>용 최신값만 갱신한다.</summary>
+    /// <param name="percent">보스 현재 HP 비율(0~100).</param>
+    /// <param name="generation">현재 진행 중인 레이드 시도 세대(<see cref="RaidEncounter"/> 기준).</param>
+    public void RecordRaidBossHpPercent(double percent, int generation)
+    {
+        _metrics.RaidBossHpPercent(percent);
+        Volatile.Write(ref _lastBossHpPercent, percent);
+        Volatile.Write(ref _lastBossGeneration, generation);
+    }
 
     /// <summary>소켓 연결(임시 플레이어 배정) 이벤트를 기록한다: 카운터 1 증가 + NDJSON 한 줄 기록.</summary>
     public void RecordPlayerConnected(string playerId, int level)
     {
         _metrics.PlayerConnected();
+        Interlocked.Increment(ref _playerConnectedTotal);
         _lineChannel.Writer.TryWrite(PlayerConnectedLine(DateTime.UtcNow, playerId, level));
     }
 
@@ -183,6 +233,7 @@ public sealed class GameEventSink : IAsyncDisposable
     public void RecordPlayerDisconnected(string playerId)
     {
         _metrics.PlayerDisconnected();
+        Interlocked.Increment(ref _playerDisconnectedTotal);
         _lineChannel.Writer.TryWrite(PlayerDisconnectedLine(DateTime.UtcNow, playerId));
     }
 
@@ -190,8 +241,35 @@ public sealed class GameEventSink : IAsyncDisposable
     public void RecordPlayerConnectionError(string playerId, Exception exception)
     {
         _metrics.PlayerConnectionError();
+        Interlocked.Increment(ref _playerConnectionErrorTotal);
         _lineChannel.Writer.TryWrite(PlayerConnectionErrorLine(DateTime.UtcNow, playerId, exception.Message));
     }
+
+    /// <summary>현재까지 누적된 이벤트 카운터와 마지막 보스 HP%/세대의 스냅샷을 반환한다.</summary>
+    /// <returns>호출 시점의 누적 카운터 + 마지막 보스 상태 스냅샷.</returns>
+    /// <remarks>
+    /// <b>[성능 및 동시성 제약 조건]</b>
+    /// <list type="bullet">
+    /// <item><description><b>Thread Safety:</b> Thread-safe. 필드마다 개별적으로 <see cref="Interlocked.Read(ref long)"/>
+    /// 또는 <see cref="Volatile.Read{T}(ref T)"/>로 원자 읽기하므로 다수 생산자 스레드와 동시에 호출해도
+    /// 안전하다. 다만 여러 필드를 하나의 <see cref="GameEventCounts"/>로 묶는 과정 자체는 원자적이지
+    /// 않다 — 표시용 근사치(콘솔 상태 줄)이므로 필드 간 미세한 시점 차이는 무해하다.</description></item>
+    /// <item><description><b>Blocking:</b> Non-blocking, 즉시 반환.</description></item>
+    /// <item><description><b>Memory Allocation:</b> Zero-allocation. <see cref="GameEventCounts"/>는
+    /// record struct라 힙 할당 없이 스택에서 반환된다.</description></item>
+    /// </list>
+    /// </remarks>
+    public GameEventCounts SnapshotCounts() => new(
+        Interlocked.Read(ref _playerConnectedTotal),
+        Interlocked.Read(ref _playerDisconnectedTotal),
+        Interlocked.Read(ref _playerConnectionErrorTotal),
+        Interlocked.Read(ref _raidBossDefeatedTotal),
+        Interlocked.Read(ref _raidFailedTotal),
+        Interlocked.Read(ref _monsterDefeatedTotal),
+        Interlocked.Read(ref _playerDefeatedTotal),
+        Interlocked.Read(ref _tickExceptionTotal),
+        Volatile.Read(ref _lastBossHpPercent),
+        Volatile.Read(ref _lastBossGeneration));
 
     /// <summary>더 이상 라인이 생성되지 않음을 알린다(채널 완료 신호).</summary>
     public void CompleteWriting() => _lineChannel.Writer.TryComplete();
