@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 
 namespace AuthServer.Configuration;
@@ -25,6 +26,14 @@ public static class AuthServerConfig
     /// (GameServer 7777, EchoServer 9000과 겹치지 않도록 구분).</summary>
     public static int Port { get; } =
         int.TryParse(Environment.GetEnvironmentVariable("IDLERPG_AUTH_PORT"), out int port) ? port : 7778;
+
+    /// <summary>리스닝 바인드 주소입니다. <c>IDLERPG_AUTH_BIND</c> 환경 변수, 없으면 127.0.0.1(루프백).
+    /// "0.0.0.0"은 <see cref="IPAddress.Any"/>와 동일값이라 파싱만으로 로컬/컨테이너 양쪽을 커버한다
+    /// (Docker 컨테이너화, plan/docker_compose_0719.md) — LoginRequestPacket.Password가 평문 전송(TLS
+    /// 미도입)이므로 기본값은 루프백을 유지하고, 신뢰 경계가 다른 컨테이너 내부망에서만 명시적으로
+    /// 0.0.0.0으로 넓힌다.</summary>
+    public static IPAddress BindAddress { get; } =
+        IPAddress.Parse(Environment.GetEnvironmentVariable("IDLERPG_AUTH_BIND") ?? "127.0.0.1");
 
     /// <summary>HMAC-SHA256 키는 해시 출력 크기(32바이트) 이상의 엔트로피를 가져야 한다는
     /// NIST SP 800-107 권고를 따른 최소 길이입니다.</summary>

@@ -10,3 +10,4 @@ _work*/
 tests/results/*
 !tests/results/SUMMARY.md
 logs/
+.env

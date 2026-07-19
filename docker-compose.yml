@@ -1,0 +1,92 @@
+# IDLE_RPG 컨테이너 스택 — GameServer/AuthServer/MonitorServer + MongoDB.
+# 설계: plan/docker_compose_0719.md. `.env`(직접 생성, .env.example 참고)에서
+# IDLERPG_AUTH_HMAC_SECRET을 반드시 설정해야 authserver/gameserver가 기동한다(Release fail-fast).
+#
+# 포트 노출 원칙: 8080(대시보드)·7777(게임)·7778(로그인)만 호스트에 publish한다.
+# 7779(텔레메트리, 인증 없음)·27017(mongo)은 절대 publish하지 않는다 — idlerpg-net 내부에서만
+# 도달 가능해야 텔레메트리 무인증 리스너와 DB가 외부에 노출되지 않는다.
+#
+# 실행: up.bat(빌드+기동) / down.bat(정지) / logs.bat(로그 추적) / seed.bat(더미 계정 3000개 시딩).
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    networks: [idlerpg-net]
+    healthcheck:
+      # authserver의 dotnet MongoDB.Driver는 자체 재시도(server selection)를 하지만, 최초 기동 시
+      # 몇 초간 불필요한 재시도 로그가 쌓이는 걸 막기 위해 healthy가 될 때까지 authserver 시작을 늦춘다.
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # ports: 의도적으로 미publish — mongo는 idlerpg-net 내부(authserver)에서만 접근한다.
+
+  authserver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PROJECT: AuthServer
+        RUNTIME_IMAGE: mcr.microsoft.com/dotnet/runtime:10.0
+    restart: unless-stopped
+    environment:
+      IDLERPG_AUTH_BIND: 0.0.0.0
+      IDLERPG_AUTH_PORT: "7778"
+      IDLERPG_MONGO_CONN: mongodb://mongo:27017
+      IDLERPG_MONGO_DB: idlerpg
+      # gameserver와 반드시 동일한 값이어야 GameServer가 AuthServer 발급 토큰을 검증할 수 있다.
+      IDLERPG_AUTH_HMAC_SECRET: ${IDLERPG_AUTH_HMAC_SECRET:?IDLERPG_AUTH_HMAC_SECRET을 .env에 설정하세요(.env.example 참고, 32바이트 이상)}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    ports:
+      - "7778:7778" # 호스트 클라이언트가 직접 로그인할 수 있도록 publish (필요 없으면 제거 가능).
+    networks: [idlerpg-net]
+
+  gameserver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PROJECT: GameServer
+        RUNTIME_IMAGE: mcr.microsoft.com/dotnet/runtime:10.0
+    restart: unless-stopped
+    environment:
+      IDLERPG_GAME_BIND: 0.0.0.0
+      IDLERPG_GAME_PORT: "7777"
+      IDLERPG_GAME_TELEMETRY_PORT: "7779"
+      # authserver와 반드시 동일한 값 — 공유 시크릿(네트워크 통신 없이 토큰만으로 검증).
+      IDLERPG_AUTH_HMAC_SECRET: ${IDLERPG_AUTH_HMAC_SECRET:?IDLERPG_AUTH_HMAC_SECRET을 .env에 설정하세요(.env.example 참고, 32바이트 이상)}
+    ports:
+      - "7777:7777" # 게임 포트만 publish. 7779(텔레메트리)는 의도적으로 publish하지 않음.
+    networks: [idlerpg-net]
+
+  monitorserver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PROJECT: MonitorServer
+        RUNTIME_IMAGE: mcr.microsoft.com/dotnet/aspnet:10.0 # Microsoft.NET.Sdk.Web(ASP.NET Core) 필요.
+    restart: unless-stopped
+    environment:
+      IDLERPG_MONITOR_WEB_BIND: 0.0.0.0
+      IDLERPG_MONITOR_WEB_PORT: "8080"
+      # 서비스명(gameserver)은 idlerpg-net 내부 DNS로 해석된다(Docker 기본 브리지 네트워크 임베디드 DNS).
+      IDLERPG_MONITOR_GAME_HOST: gameserver
+      IDLERPG_MONITOR_GAME_TELEMETRY_PORT: "7779"
+    depends_on:
+      - gameserver # soft 의존성: 없어도 기동은 되고 TelemetryClientLoop가 자동 재접속한다.
+    ports:
+      - "8080:8080"
+    networks: [idlerpg-net]
+
+volumes:
+  mongo-data:
+
+networks:
+  idlerpg-net:
+    driver: bridge

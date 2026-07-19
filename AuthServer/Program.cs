@@ -1,4 +1,5 @@
 using System.Net;
+using System.Runtime.InteropServices;
 using AuthServer.Accounts;
 using AuthServer.Configuration;
 using AuthServer.Login;
@@ -49,6 +50,14 @@ Console.CancelKeyPress += (_, e) =>
     e.Cancel = true;
     cts.Cancel();
 };
+// PosixSignalRegistration(SIGTERM): docker compose down/stop이 보내는 신호는 SIGINT가 아니라
+// SIGTERM이라 위 CancelKeyPress만으로는 잡히지 않는다 — GameServer/Main.cs와 동일 이유로 등록
+// (Windows 로컬 dotnet run에는 SIGTERM 자체가 없어 영향 없음).
+using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
+{
+    ctx.Cancel = true;
+    cts.Cancel();
+});
 
 IServerListener listener = ServerNet.CreateListener();
 // OnReceived는 Start() 호출 전에 배선해야 한다(이후 설정 시 InvalidOperationException).
@@ -57,10 +66,11 @@ listener.OnReceived = handler.OnReceived;
 // 유한값으로 설정(GameServer의 공유 보스 co-op 코드리뷰에서 발견된 동일 위험 사전 반영).
 listener.SessionSendTimeout = TimeSpan.FromSeconds(2);
 
-// IPAddress.Loopback: LoginRequestPacket.Password는 평문 전송이라(패킷 주석 참고) TLS 없이
-// 외부에 노출하면 위험하다. TLS가 도입되기 전까지 GameServer와 동일하게 루프백 전용으로 유지한다.
-listener.Start(AuthServerConfig.Port, IPAddress.Loopback);
-Console.WriteLine($"AuthServer listening on 127.0.0.1:{AuthServerConfig.Port}");
+// AuthServerConfig.BindAddress 기본값은 루프백: LoginRequestPacket.Password는 평문 전송이라(패킷
+// 주석 참고) TLS 없이 외부에 노출하면 위험하다. TLS가 도입되기 전까지 GameServer와 동일하게 루프백을
+// 기본값으로 유지하고, Docker 등 신뢰 경계가 다른 환경에서는 IDLERPG_AUTH_BIND로 명시적으로만 넓힌다.
+listener.Start(AuthServerConfig.Port, AuthServerConfig.BindAddress);
+Console.WriteLine($"AuthServer listening on {AuthServerConfig.BindAddress}:{AuthServerConfig.Port}");
 
 try
 {

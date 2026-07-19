@@ -3,6 +3,7 @@
 global using BigNumber = double;
 
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Text;
 using GameServer.Items;
 using GameServer.Systems;
@@ -38,8 +39,17 @@ using ServerLib.Interface;
 // 루프백 한정) — OnReceived를 배선하지 않아 모니터가 보내는 데이터는 애초에 처리되지 않는다.
 // PvP·회원가입·스테이지 시스템은 이후 사이클 과제다.
 
-const int Port = 7777; // examples/EchoServer(9000)와 겹치지 않도록 구분 — 필요 시 동시 실행 가능.
-const int TelemetryPort = 7779; // 게임 리스너(7777)와 겹치지 않는 별도 포트 — 웹 모니터링 전용 읽기 전용 구독.
+// 포트/바인드는 환경 변수로 재정의 가능(Docker 컨테이너화, plan/docker_compose_0719.md) — 값이
+// 없으면 기존 로컬 실행 기본값을 그대로 쓴다.
+int gamePort = int.TryParse(Environment.GetEnvironmentVariable("IDLERPG_GAME_PORT"), out var envGamePort)
+    ? envGamePort
+    : 7777; // examples/EchoServer(9000)와 겹치지 않도록 구분 — 필요 시 동시 실행 가능.
+int telemetryPort = int.TryParse(Environment.GetEnvironmentVariable("IDLERPG_GAME_TELEMETRY_PORT"), out var envTelemetryPort)
+    ? envTelemetryPort
+    : 7779; // 게임 리스너(7777)와 겹치지 않는 별도 포트 — 웹 모니터링 전용 읽기 전용 구독.
+// IPAddress.Parse("127.0.0.1")는 IPAddress.Loopback과 동일값이므로 기본 동작은 이전과 같다.
+// Docker에서는 IDLERPG_GAME_BIND=0.0.0.0으로 재정의해 컨테이너 밖(다른 서비스)에서 접속을 받는다.
+var bindAddress = IPAddress.Parse(Environment.GetEnvironmentVariable("IDLERPG_GAME_BIND") ?? "127.0.0.1");
 var raidTimeLimit = TimeSpan.FromSeconds(60); // 이 시간 내에 전원이 힘을 모아 보스를 잡아야 한다.
 
 var levelSystem = PlayerLevelSystem.CreateDefault();
@@ -145,6 +155,15 @@ Console.CancelKeyPress += (_, e) =>
     e.Cancel = true; // 기본 강제 종료를 막고, 대신 취소 토큰으로 정리할 시간을 준다
     cts.Cancel();
 };
+// PosixSignalRegistration(SIGTERM): docker compose down/stop이 보내는 신호는 SIGINT가 아니라
+// SIGTERM이라 위 CancelKeyPress만으로는 잡히지 않는다 — 등록이 없으면 stop-timeout(기본 10초)을
+// 다 채운 뒤 SIGKILL로 강제 종료되어 sink(NDJSON) 마지막 flush가 유실된다. Windows에서는 SIGTERM
+// 자체가 발생하지 않아 로컬 dotnet run에는 영향 없다(무해한 등록만 유지).
+using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
+{
+    ctx.Cancel = true;
+    cts.Cancel();
+});
 
 // 레이드 액터 루프 + 보상 드레인 루프 + 브로드캐스트 드레인 루프 + 텔레메트리 퍼블리시 루프를 먼저
 // 기동한 뒤 리스너를 연다 — 첫 접속이 들어오기 전에 SubmitDamage를 받을 준비가 되어 있어야 한다.
@@ -192,11 +211,13 @@ listener.OnClientError = binder.OnError;
 // (프로토콜이 생기는 사이클에서 타임아웃 정책도 함께 재검토). 텔레메트리 리스너도 동일한 이유로
 // IdleTimeout을 두지 않는다 — 모니터는 애초에 아무것도 보내지 않으므로 유휴 판정 자체가 무의미하다.
 
-// IPAddress.Loopback: 토큰 게이트가 생겼어도 AuthTokenPacket이 여전히 평문으로 오가므로(TLS
-// 미도입) IPAddress.Any로 외부에 노출하기엔 이르다. TLS 도입 후 재검토한다.
-listener.Start(Port, IPAddress.Loopback);
-// 텔레메트리 리스너도 루프백 한정 — 인증 게이트가 없는 읽기 전용 리스너라 외부 노출은 더더욱 이르다.
-telemetryListener.Start(TelemetryPort, IPAddress.Loopback);
+// bindAddress 기본값은 루프백: 토큰 게이트가 생겼어도 AuthTokenPacket이 여전히 평문으로 오가므로
+// (TLS 미도입) IPAddress.Any로 외부에 노출하기엔 이르다. TLS 도입 후 재검토한다. Docker 컨테이너
+// 내부망처럼 신뢰 경계가 다른 환경에서는 IDLERPG_GAME_BIND=0.0.0.0으로 명시적으로만 넓힌다.
+listener.Start(gamePort, bindAddress);
+// 텔레메트리 리스너도 같은 bindAddress를 쓴다 — 인증 게이트가 없는 읽기 전용 리스너라 외부(호스트) 노출은
+// 더더욱 이르므로, 컨테이너 환경에서도 docker-compose가 이 포트를 host에 publish하지 않아야 한다.
+telemetryListener.Start(telemetryPort, bindAddress);
 
 try
 {

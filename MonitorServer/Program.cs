@@ -10,20 +10,32 @@
 // 실행법:
 //   dotnet run --project GameServer   (먼저 실행해 두어야 텔레메트리를 받을 수 있음 — 없어도 기동은 됨)
 //   dotnet run --project MonitorServer
-//   브라우저: http://127.0.0.1:8080  (포트는 IDLERPG_MONITOR_WEB_PORT로 재정의 가능)
+//   브라우저: http://127.0.0.1:8080  (포트는 IDLERPG_MONITOR_WEB_PORT, 바인드는 IDLERPG_MONITOR_WEB_BIND로 재정의 가능)
+//   Docker: IDLERPG_MONITOR_GAME_HOST/IDLERPG_MONITOR_GAME_TELEMETRY_PORT로 GameServer 접속 대상 재정의
+//   (docker-compose.yml, plan/docker_compose_0719.md 참고)
 // =============================================================================
 
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MonitorServer;
 
-const string GameServerHost = "127.0.0.1"; // 루프백 고정 — GameServer 텔레메트리 리스너도 루프백 전용(Main.cs 참고).
-const int TelemetryPort = 7779; // GameServer/Main.cs의 TelemetryPort 상수와 반드시 일치해야 한다.
+// GameServerHost/TelemetryPort는 환경 변수로 재정의 가능(Docker 컨테이너화, plan/docker_compose_0719.md).
+// 기본값은 기존 로컬 실행과 동일한 루프백 — GameServer 텔레메트리 리스너도 기본이 루프백이므로
+// (GameServer/Main.cs 참고) 로컬에서는 값을 바꿀 필요가 없다. docker-compose에서는
+// IDLERPG_MONITOR_GAME_HOST=gameserver(서비스명 DNS)로 재정의한다.
+string gameServerHost = Environment.GetEnvironmentVariable("IDLERPG_MONITOR_GAME_HOST") ?? "127.0.0.1";
+int telemetryPort = int.TryParse(Environment.GetEnvironmentVariable("IDLERPG_MONITOR_GAME_TELEMETRY_PORT"), out var envTelemetryPort)
+    ? envTelemetryPort
+    : 7779; // GameServer/Main.cs의 telemetryPort 기본값과 반드시 일치해야 한다.
 var reconnectDelay = TimeSpan.FromSeconds(2); // GameServer 미기동/재시작 시 재접속 간격.
 
 int webPort = int.TryParse(Environment.GetEnvironmentVariable("IDLERPG_MONITOR_WEB_PORT"), out var parsedPort)
     ? parsedPort
     : 8080;
+// 대시보드 웹 서버 바인드 주소. 기본값은 루프백(기존 로컬 실행과 동일). Docker에서는
+// IDLERPG_MONITOR_WEB_BIND=0.0.0.0으로 재정의해 호스트에 publish된 포트로 접속을 받는다.
+string webBind = Environment.GetEnvironmentVariable("IDLERPG_MONITOR_WEB_BIND") ?? "127.0.0.1";
 
 // JsonSerializerOptions(camelCase): DashboardHtml.cs의 JS가 s.bossCurrentHp처럼 camelCase 필드명을
 // 읽으므로, System.Text.Json 기본 PascalCase 대신 명시적으로 맞춰야 한다. 재사용 가능한 옵션
@@ -40,10 +52,18 @@ Console.CancelKeyPress += (_, e) =>
     e.Cancel = true;
     cts.Cancel();
 };
+// PosixSignalRegistration(SIGTERM): docker compose down/stop이 보내는 신호는 SIGINT가 아니라
+// SIGTERM이라 위 CancelKeyPress만으로는 잡히지 않는다 — GameServer/Main.cs와 동일 이유로 등록
+// (Windows 로컬 dotnet run에는 SIGTERM 자체가 없어 영향 없음).
+using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
+{
+    ctx.Cancel = true;
+    cts.Cancel();
+});
 
 // Task.Run(fire-and-forget): 텔레메트리 재접속 루프는 웹 서버 수명 내내 백그라운드에서 독립적으로
 // 돈다 — WebApplication.Run()이 스레드를 점유하는 동안에도 계속 재접속을 시도한다.
-_ = Task.Run(() => TelemetryClientLoop.RunAsync(GameServerHost, TelemetryPort, store, reconnectDelay, cts.Token), cts.Token);
+_ = Task.Run(() => TelemetryClientLoop.RunAsync(gameServerHost, telemetryPort, store, reconnectDelay, cts.Token), cts.Token);
 
 var builder = WebApplication.CreateBuilder();
 // 콘솔 노이즈 억제: 이 프로세스는 오직 대시보드 서빙만 하므로 ASP.NET Core 기본 요청 로깅이 불필요하다
@@ -81,4 +101,4 @@ app.MapGet("/events", async (HttpContext ctx, CancellationToken requestAborted) 
     }
 });
 
-app.Run($"http://127.0.0.1:{webPort}");
+app.Run($"http://{webBind}:{webPort}");
