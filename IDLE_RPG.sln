@@ -1,7 +1,5 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestCode", "TestCode\TestCode.csproj", "{5A80A204-09AF-4C2C-9F5A-00A09CA478D9}"
-EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0AB3BF05-4346-4AA6-1389-037BE0695223}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "IdleRpg.HarnessTests", "tests\IdleRpg.HarnessTests\IdleRpg.HarnessTests.csproj", "{2A510FF1-205F-4CC3-A831-98AB9EC03D57}"
@@ -38,18 +36,6 @@ Global
 		Release|x86 = Release|x86
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{5A80A204-09AF-4C2C-9F5A-00A09CA478D9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{5A80A204-09AF-4C2C-9F5A-00A09CA478D9}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{5A80A204-09AF-4C2C-9F5A-00A09CA478D9}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{5A80A204-09AF-4C2C-9F5A-00A09CA478D9}.Debug|x64.Build.0 = Debug|Any CPU
-		{5A80A204-09AF-4C2C-9F5A-00A09CA478D9}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{5A80A204-09AF-4C2C-9F5A-00A09CA478D9}.Debug|x86.Build.0 = Debug|Any CPU
-		{5A80A204-09AF-4C2C-9F5A-00A09CA478D9}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{5A80A204-09AF-4C2C-9F5A-00A09CA478D9}.Release|Any CPU.Build.0 = Release|Any CPU
-		{5A80A204-09AF-4C2C-9F5A-00A09CA478D9}.Release|x64.ActiveCfg = Release|Any CPU
-		{5A80A204-09AF-4C2C-9F5A-00A09CA478D9}.Release|x64.Build.0 = Release|Any CPU
-		{5A80A204-09AF-4C2C-9F5A-00A09CA478D9}.Release|x86.ActiveCfg = Release|Any CPU
-		{5A80A204-09AF-4C2C-9F5A-00A09CA478D9}.Release|x86.Build.0 = Release|Any CPU
 		{2A510FF1-205F-4CC3-A831-98AB9EC03D57}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{2A510FF1-205F-4CC3-A831-98AB9EC03D57}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{2A510FF1-205F-4CC3-A831-98AB9EC03D57}.Debug|x64.ActiveCfg = Debug|Any CPU
