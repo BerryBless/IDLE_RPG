@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <!-- ServerGC: 10k 가상 클라이언트가 만드는 소켓·파이프·상태머신 힙 압력에서
+             워크스테이션 GC의 단일 힙 경합을 피하고 코어별 힙으로 할당 처리량을 확보한다. -->
+        <ServerGarbageCollection>true</ServerGarbageCollection>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- LoadTester.Tests가 internal 멤버(RttHistogram.BucketIndex, 옵션 파서 내부 등)를
+             직접 검증할 수 있도록 테스트 어셈블리에 internal 가시성을 부여한다. -->
+        <InternalsVisibleTo Include="LoadTester.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- ServerLib: 부하 대상 서버와 동일한 프레이밍/직렬화/클라이언트(ServerNet.CreateClient,
+             PING-PONG 내장 RTT)를 재사용하기 위한 유일한 참조 — 외부 의존성 0 정책 유지. -->
+        <ProjectReference Include="..\..\ServerLib\ServerLib.csproj" />
+    </ItemGroup>
+
+</Project>
