@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using LoadTester.Auth;
+using LoadTester.Coordination;
 using LoadTester.Metrics;
 using LoadTester.Options;
 using ServerLib;
@@ -41,6 +42,8 @@ public sealed class VirtualClient
     private static readonly BinaryPacketSerializer Serializer = new();
 
     private readonly int _index;
+    private readonly int _targetPort;
+    private readonly int _sourcePort; // 0이면 소스 포트 바인딩 안 함(OS 자동 임시 포트)
     private readonly LoadTestOptions _options;
     private readonly ITokenSource _tokens;
     private readonly MetricsAggregator _metrics;
@@ -65,6 +68,13 @@ public sealed class VirtualClient
         MetricsAggregator metrics, ReconnectPolicy reconnect, ConnectPacer pacer)
     {
         _index = index;
+        // 목적지 포트: 전역 인덱스를 P개 서버 포트에 라운드로빈 분산.
+        _targetPort = WorkerShard.SelectPort(options.GamePort, options.PortCount, index);
+        // 소스 포트: 멀티포트일 때만 명시 바인딩. sourcePort=base+(index/P), dstPort=base+(index%P)로
+        // (sourcePort, dstPort) 4-튜플이 전역 유일하면서, 같은 소스 포트를 P개 목적지에 재사용한다
+        // (SO_REUSEADDR). 단일 소스 IP의 임시 포트 상한(~수만)을 P배로 넓히는 검증된 기법. P=1이면
+        // 이득이 없어 0(OS 자동 임시 포트) — 기존 단일 포트 부하 동작을 보존한다.
+        _sourcePort = options.PortCount > 1 ? options.SourcePortBase + index / options.PortCount : 0;
         _options = options;
         _tokens = tokens;
         _metrics = metrics;
@@ -104,6 +114,10 @@ public sealed class VirtualClient
                 if (cycleSucceeded)
                 {
                     failureStreak = 0;
+                    // churn 모드: 인증 성공 후 즉시 재접속(백오프 없음) — 페이서가 아니라 서버의
+                    // 접속/인증/세션정리 처리율 자체를 측정한다. 실패 시엔 아래 백오프를 그대로 적용.
+                    if (_options.Churn)
+                        continue;
                     // 인증까지 갔던 세션의 끊김: 백오프 1회차부터 다시 시작.
                 }
                 failureStreak++;
@@ -133,6 +147,9 @@ public sealed class VirtualClient
         await using IClientConnection client = ServerNet.CreateClient();
         client.PingInterval = _options.PingInterval;
         client.SendTimeout = TimeSpan.FromSeconds(5);
+        // 소스 포트 명시 바인딩(멀티포트 시): SO_REUSEADDR로 P개 목적지에 소스 포트 재사용 → 연결 상한 P배.
+        if (_sourcePort != 0)
+            client.LocalEndPoint = new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, _sourcePort);
 
         // TaskCompletionSource(RunContinuationsAsynchronously): I/O 콜백 스레드가 신호를 보내고
         // 이 태스크가 깨어난다. 연속 작업(재접속 로직)이 I/O 스레드를 점유하지 않게 비동기 재개.
@@ -170,7 +187,7 @@ public sealed class VirtualClient
         _metrics.RecordConnectAttempt();
         try
         {
-            await client.ConnectAsync(_options.Host, _options.GamePort, lifetime);
+            await client.ConnectAsync(_options.Host, _targetPort, lifetime);
         }
         catch (OperationCanceledException)
         {
@@ -213,6 +230,11 @@ public sealed class VirtualClient
 
             // 인증 직후를 수신 기준점으로: 첫 브로드캐스트 도착 전 구간이 스톨로 오판되지 않게 한다.
             Interlocked.Exchange(ref _lastAppPacketUnixMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+            // churn 모드: 유지하지 않고 인증 성공 즉시 종료(await using이 소켓을 닫는다) → RunAsync가
+            // 즉시 재접속. 의도된 종료라 UnexpectedDisconnect로 집계하지 않는다.
+            if (_options.Churn)
+                return true;
 
             // 끊김 또는 셧다운까지 유지. 셧다운이면 OCE로 빠져 RunAsync에서 정상 종료.
             await disconnected.Task.WaitAsync(lifetime);

@@ -37,8 +37,11 @@ public sealed class LoadController
         {
             // Random.Shared가 아닌 개별 인스턴스: ReconnectPolicy는 Not thread-safe 계약이므로
             // 클라이언트 태스크마다 전용 Random을 소유시킨다(시드는 인덱스 파생으로 재현성 확보).
-            var policy = new ReconnectPolicy(options.ReconnectDelay, new Random(HashCode.Combine(i)));
-            _clients.Add(new VirtualClient(i, options, tokens, metrics, policy, pacer));
+            // 전역 인덱스 = 워커 오프셋 + 로컬 인덱스. 계정 매핑(clientIndex % accounts)과 포트 분산이
+            // 워커 간 전역적으로 유일·균등해지도록 오프셋을 더한다. 단일 프로세스면 오프셋 0이라 기존과 동일.
+            int globalIndex = options.ClientIndexOffset + i;
+            var policy = new ReconnectPolicy(options.ReconnectDelay, new Random(HashCode.Combine(globalIndex)));
+            _clients.Add(new VirtualClient(globalIndex, options, tokens, metrics, policy, pacer));
         }
     }
 

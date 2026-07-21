@@ -30,7 +30,7 @@ public sealed class MetricsSampler
     private readonly MetricsAggregator _metrics;
     private readonly TelemetrySubscriber? _telemetry;
     private readonly ResourceMonitor _resources;
-    private readonly ConsoleReporter _console;
+    private readonly IIntervalReporter _console;
     private readonly NdjsonMetricsWriter _writer;
     private readonly VerdictEvaluator _verdict;
 
@@ -41,11 +41,15 @@ public sealed class MetricsSampler
 
     private readonly Stopwatch _elapsed = Stopwatch.StartNew();
     private CounterTotals _previousTotals;
+    private int _peakAuthenticated;
+
+    /// <summary>실행 중 관측된 최대 동시 인증 클라이언트 수(워커 최종 보고·상한 탐침용).</summary>
+    public int PeakAuthenticated => _peakAuthenticated;
 
     /// <summary>샘플러를 생성합니다.</summary>
     public MetricsSampler(LoadTestOptions options, IReadOnlyList<VirtualClient> clients,
         MetricsAggregator metrics, TelemetrySubscriber? telemetry, ResourceMonitor resources,
-        ConsoleReporter console, NdjsonMetricsWriter writer, VerdictEvaluator verdict)
+        IIntervalReporter console, NdjsonMetricsWriter writer, VerdictEvaluator verdict)
     {
         _options = options;
         _clients = clients;
@@ -108,6 +112,9 @@ public sealed class MetricsSampler
             if (nowUnixMs - snap.LastAppPacketUnixMs > stallThresholdMs)
                 stalled++;
         }
+
+        if (authenticated > _peakAuthenticated)
+            _peakAuthenticated = authenticated;
 
         CounterTotals totals = _metrics.SnapshotTotals();
         long broadcastsDelta = totals.Broadcasts - _previousTotals.Broadcasts;

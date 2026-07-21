@@ -45,7 +45,10 @@ public sealed class TelemetryPublisher
 {
     private static readonly TimeSpan DefaultPublishInterval = TimeSpan.FromSeconds(1);
 
-    private readonly IServerListener _gameListener;
+    // IReadOnlyList<IServerListener>: 용량 모드에서 게임 리스너가 P개(멀티포트)로 늘어나므로 전
+    // 포트의 ActiveSessionCount/TotalRejectedConnections를 합산해야 ConnectedCount가 전역 접속 수가
+    // 된다. 기본(단일 포트)에서는 원소 1개라 기존 동작과 동일하다.
+    private readonly IReadOnlyList<IServerListener> _gameListeners;
     private readonly ISessionRegistry _telemetryRegistry;
     private readonly TimeSpan _publishInterval;
 
@@ -74,10 +77,22 @@ public sealed class TelemetryPublisher
     /// <param name="telemetryRegistry">브로드캐스트 대상(접속한 모니터 프로세스 전체)을 추적하는 전용 레지스트리</param>
     /// <param name="publishInterval">스냅샷 전송 주기. 생략 시 1초 — 운영 대시보드의 신선도 하한이다.</param>
     public TelemetryPublisher(IServerListener gameListener, ISessionRegistry telemetryRegistry, TimeSpan? publishInterval = null)
+        : this(new[] { gameListener }, telemetryRegistry, publishInterval)
     {
         ArgumentNullException.ThrowIfNull(gameListener);
+    }
+
+    /// <summary>여러 게임 리스너(멀티포트 용량 모드)의 통계를 합산해 발행하는 퍼블리셔를 생성한다.</summary>
+    /// <param name="gameListeners">통계를 합산할 게임 리스너 목록(각 포트 1개). 비어 있으면 안 된다.</param>
+    /// <param name="telemetryRegistry">브로드캐스트 대상을 추적하는 전용 레지스트리</param>
+    /// <param name="publishInterval">스냅샷 전송 주기. 생략 시 1초.</param>
+    public TelemetryPublisher(IReadOnlyList<IServerListener> gameListeners, ISessionRegistry telemetryRegistry, TimeSpan? publishInterval = null)
+    {
+        ArgumentNullException.ThrowIfNull(gameListeners);
         ArgumentNullException.ThrowIfNull(telemetryRegistry);
-        _gameListener = gameListener;
+        if (gameListeners.Count == 0)
+            throw new ArgumentException("게임 리스너 목록은 비어 있을 수 없습니다.", nameof(gameListeners));
+        _gameListeners = gameListeners;
         _telemetryRegistry = telemetryRegistry;
         _publishInterval = publishInterval ?? DefaultPublishInterval;
     }
@@ -124,11 +139,23 @@ public sealed class TelemetryPublisher
                     _cachedBossStep = step;
                 }
 
+                // 전 게임 리스너(멀티포트) 합산: 접속 수는 합, 거부 수는 합, 가동 상태는 전부 AND
+                // (하나라도 죽으면 not running). 단일 포트에서는 원소 1개라 기존 동작과 동일.
+                int connectedCount = 0;
+                long rejectedConnections = 0;
+                bool isRunning = true;
+                for (int i = 0; i < _gameListeners.Count; i++)
+                {
+                    connectedCount += _gameListeners[i].ActiveSessionCount;
+                    rejectedConnections += _gameListeners[i].TotalRejectedConnections;
+                    isRunning &= _gameListeners[i].IsRunning;
+                }
+
                 var packet = new TelemetrySnapshotPacket
                 {
-                    ConnectedCount = _gameListener.ActiveSessionCount,
-                    IsRunning = _gameListener.IsRunning,
-                    RejectedConnections = _gameListener.TotalRejectedConnections,
+                    ConnectedCount = connectedCount,
+                    IsRunning = isRunning,
+                    RejectedConnections = rejectedConnections,
                     BossCurrentHp = _cachedBossStep.CurrentHp,
                     BossMaxHp = _cachedBossStep.MaxHp,
                     Generation = _cachedBossStep.NewGeneration,

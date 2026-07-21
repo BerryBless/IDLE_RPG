@@ -1,9 +1,11 @@
 using System.Text;
 using LoadTester.Auth;
 using LoadTester.Client;
+using LoadTester.Coordination;
 using LoadTester.Metrics;
 using LoadTester.Options;
 using LoadTester.Output;
+using LoadTester.Stress;
 using LoadTester.Telemetry;
 using LoadTester.Verdict;
 using ServerLib.Core.Auth;
@@ -26,13 +28,37 @@ if (!LoadTestOptions.TryParse(args, out LoadTestOptions? options, out string? pa
     return parseError is null ? 0 : 2;
 }
 
-if (options!.Clients > LoadTestOptions.ClientsPortWarningThreshold)
+// 스트레스 시나리오 지정 시: 페이즈 기반 StressRunner로 분기(코디네이터/워커 분기 전).
+// 단, 스트레스가 스폰한 버스트/churn 워커는 여전히 --role worker 경로를 타야 하므로 worker면 제외.
+if (options!.Stress is not null && options.Role != "worker")
 {
-    // Windows 동적 포트 기본 범위는 49152–65535(16,384개). 재접속 churn의 TIME_WAIT(기본 최대 240초
-    // 유지)와 full 모드 로그인 연결까지 겹치면 고갈될 수 있다. 관리자 권한으로 아래 명령으로 확장 권장:
-    //   netsh int ipv4 set dynamicport tcp start=10000 num=55535
-    Console.WriteLine($"[경고] --clients {options.Clients} > {LoadTestOptions.ClientsPortWarningThreshold}: " +
-                      "Windows 동적 포트 고갈 위험. netsh로 동적 포트 범위 확장을 권장합니다.");
+    using var stressCts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) => { e.Cancel = true; stressCts.Cancel(); };
+    return await StressRunner.RunAsync(options, stressCts.Token);
+}
+
+// 역할 결정: coordinator면 워커 K개를 스폰·집계하고 여기서 끝낸다. 단일 프로세스당 포트 경고는
+// 워커 샤드(포트 분산 고려) 기준이므로 코디네이터/워커 분기 이후에 판단한다.
+bool isCoordinator = options.Role == "coordinator" || (options.Role == "auto" && options.Workers > 1);
+if (isCoordinator)
+{
+    using var coordCts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) => { e.Cancel = true; coordCts.Cancel(); };
+    return await CoordinatorRunner.RunAsync(options, coordCts.Token);
+}
+
+bool isWorker = options.Role == "worker";
+
+// 단일 포트당 클라이언트 수가 임시 포트 상한에 근접하면 경고. 멀티포트면 포트당 부하가 나뉘므로
+// 유효 상한은 clients/PortCount 기준이다.
+int clientsPerPort = options.Clients / Math.Max(1, options.PortCount);
+if (clientsPerPort > LoadTestOptions.ClientsPortWarningThreshold)
+{
+    // Windows 동적 포트 기본 범위는 ~16,384개. capacity-tune.bat(netsh)로 확장하고 --port-count를
+    // 늘려 포트당 부하를 낮추면 상한이 포트 수배로 넓어진다.
+    Console.WriteLine($"[경고] 포트당 클라이언트 {clientsPerPort}(= {options.Clients}/{options.PortCount}) > " +
+                      $"{LoadTestOptions.ClientsPortWarningThreshold}: 임시 포트 고갈 위험. " +
+                      "capacity-tune.bat로 동적 포트 확장 + --port-count 증대를 권장합니다.");
 }
 
 // 토큰 소스 구성(모드 분기).
@@ -53,13 +79,16 @@ else
 
 var metrics = new MetricsAggregator();
 var controller = new LoadController(options, tokenSource, metrics);
-var telemetry = options.NoTelemetry ? null : new TelemetrySubscriber();
+// 워커는 텔레메트리·서버 리소스 샘플링을 하지 않는다(코디네이터만 소유 — K프로세스 중복 방지).
+var telemetry = (options.NoTelemetry || isWorker) ? null : new TelemetrySubscriber();
 var resources = new ResourceMonitor(options.ServerPid, options.ServerProcessName);
-var consoleReporter = new ConsoleReporter(options.ReportInterval);
+// 워커면 StatusLineEmitter(@interval stdout), 아니면 ConsoleReporter(사람용 콘솔 1줄).
+var statusEmitter = isWorker ? new StatusLineEmitter(options.WorkerIndex) : null;
+IIntervalReporter reporter = statusEmitter ?? (IIntervalReporter)new ConsoleReporter(options.ReportInterval);
 var verdictEvaluator = new VerdictEvaluator(VerdictThresholds.FromOptions(options));
 using var ndjson = new NdjsonMetricsWriter(options.OutDirectory, options.MaxLogMb);
 var sampler = new MetricsSampler(
-    options, controller.Clients, metrics, telemetry, resources, consoleReporter, ndjson, verdictEvaluator);
+    options, controller.Clients, metrics, telemetry, resources, reporter, ndjson, verdictEvaluator);
 
 // 수명 관리: 지속시간 경과(정상) ∪ Ctrl+C(중단). 어느 쪽이든 같은 토큰으로 전 컴포넌트를 세운다.
 using var lifetimeCts = new CancellationTokenSource();
@@ -116,6 +145,13 @@ catch (Exception ex)
 FinalStats finalStats = sampler.BuildFinalStats();
 Verdict verdict = verdictEvaluator.Evaluate(finalStats);
 ndjson.WriteRunEnd(verdict, finalStats);
+
+// 워커: 사람용 요약 대신 @final 라인 1개만 stdout으로 내보내고 종료(코디네이터가 파싱).
+if (statusEmitter is not null)
+{
+    statusEmitter.EmitFinal(finalStats, verdict, sampler.PeakAuthenticated, userAborted ? "aborted" : "normal");
+    return userAborted ? 3 : (verdict.Passed ? 0 : 1);
+}
 
 var summary = new StringBuilder();
 summary.AppendLine();

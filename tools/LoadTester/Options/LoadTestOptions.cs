@@ -1,4 +1,5 @@
 using System.Globalization;
+using LoadTester.Stress;
 
 namespace LoadTester.Options;
 
@@ -99,6 +100,68 @@ public sealed record LoadTestOptions
     /// <summary>NDJSON 파일 로테이션 크기 상한(MB). 시간 경계(정시)에도 로테이션한다.</summary>
     public int MaxLogMb { get; init; } = 256;
 
+    // ── 멀티프로세스·멀티포트 용량 하네스 옵션 (plan/capacity_harness_0721.md) ──
+
+    /// <summary>스폰할 워커 프로세스 수. 2 이상이면 이 프로세스는 코디네이터가 된다(Role=auto 기준).</summary>
+    public int Workers { get; init; } = 1;
+
+    /// <summary>실행 역할. auto(기본)=Workers>1이면 코디네이터·아니면 단일, coordinator, worker.</summary>
+    public string Role { get; init; } = "auto";
+
+    /// <summary>워커 인덱스(0 이상 Workers 미만). 코디네이터가 각 워커에 주입한다.</summary>
+    public int WorkerIndex { get; init; }
+
+    /// <summary>서버가 연 게임 포트 수. 클라이언트는 <c>GamePort + globalIndex % PortCount</c>로 분산 접속한다.</summary>
+    public int PortCount { get; init; } = 1;
+
+    /// <summary>이 워커 클라이언트들의 전역 인덱스 시작 오프셋(계정·포트 매핑의 전역 유일성 확보).</summary>
+    public int ClientIndexOffset { get; init; }
+
+    /// <summary>용량 판정 모드. 활성 시 5규칙 대신 CapacityVerdictEvaluator를 쓴다.</summary>
+    public bool Capacity { get; init; }
+
+    /// <summary>용량 판정의 목표 동시 연결 수. 미지정 시 Clients(코디네이터의 총 클라이언트)를 쓴다.</summary>
+    public int? TargetConcurrent { get; init; }
+
+    /// <summary>
+    /// 멀티포트(PortCount>1)에서 클라이언트가 명시적으로 바인드할 소스 포트의 시작값. 소스 포트를
+    /// P개 목적지 포트에 재사용(SO_REUSEADDR)해 단일 소스 IP 임시 포트 상한을 P배로 넓힌다.
+    /// OS 자동 임시 포트 범위(~1024..15000)·서버 리스너 포트·Windows 예약 범위와 겹치지 않게 25000 기본.
+    /// </summary>
+    public int SourcePortBase { get; init; } = 25000;
+
+    // ── 스트레스 테스트 하네스 옵션 (plan/stress_harness_0721.md) ──
+
+    /// <summary>스트레스 시나리오. null이면 일반 부하/용량 경로(스트레스 아님).</summary>
+    public StressScenarioKind? Stress { get; init; }
+
+    /// <summary>정상 대조군 프로브 클라이언트 수(connect+auth+hold, 전 페이즈 유지).</summary>
+    public int ProbeClients { get; init; } = 200;
+
+    /// <summary>인프로세스 스트레스 풀 크기(malformed/slowloris 적대적 클라이언트 수).</summary>
+    public int StressClients { get; init; } = 4000;
+
+    /// <summary>버스트/churn 과부하 목표 동시 연결 수(미지정 시 Clients).</summary>
+    public int? StressTarget { get; init; }
+
+    /// <summary>Baseline 페이즈 길이(프로브만으로 기준선 측정).</summary>
+    public TimeSpan BaselineDuration { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>During 페이즈 길이(스트레스 구동).</summary>
+    public TimeSpan StressDuration { get; init; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>Recovery 페이즈 최대 길이(스트레스 해제 후 회복 관측).</summary>
+    public TimeSpan RecoveryDuration { get; init; } = TimeSpan.FromSeconds(90);
+
+    /// <summary>프로브 클라이언트 PING 주기(짧게 잡아 페이즈 내 RTT 곡선 해상도 확보).</summary>
+    public TimeSpan ProbePingInterval { get; init; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>slowloris 모드. silent=무송신, drip=1B/s 부분 프레임 드립.</summary>
+    public string SlowlorisMode { get; init; } = "silent";
+
+    /// <summary>churn 모드(내부): 인증 성공 후 즉시 종료·재접속 반복. 코디네이터가 churn 워커에 주입.</summary>
+    public bool Churn { get; init; }
+
     /// <summary>이 수를 넘는 <see cref="Clients"/> 지정 시 Windows 동적 포트 고갈 경고를 출력한다.</summary>
     public const int ClientsPortWarningThreshold = 12_000;
 
@@ -131,6 +194,24 @@ public sealed record LoadTestOptions
           --server-max-ws-mb  int                      (선택: 서버 워킹셋 판정 규칙)
           --out               디렉터리                 (기본 logs)
           --max-log-mb        int                      (기본 256)
+        [멀티프로세스·멀티포트 용량 하네스]
+          --workers           int                      (기본 1; >1이면 코디네이터)
+          --role              auto|coordinator|worker  (기본 auto)
+          --worker-index      int                      (워커 전용, < --workers)
+          --port-count        int                      (기본 1; 클라 i → game-port + i%P)
+          --client-index-offset int                    (코디네이터가 워커에 주입)
+          --capacity                                   (용량 판정 모드)
+          --target-concurrent int                      (용량 목표 동시 연결, 기본 --clients)
+        [스트레스 테스트]
+          --stress            burst|churn|malformed|slowloris
+          --probe-clients     int                      (기본 200; 정상 대조군)
+          --stress-clients    int                      (기본 4000; malformed/slowloris 풀)
+          --stress-target     int                      (burst/churn 과부하 목표)
+          --baseline-duration duration                 (기본 30s)
+          --stress-duration   duration                 (기본 60s)
+          --recovery-duration duration                 (기본 90s)
+          --probe-ping-interval duration               (기본 1s)
+          --slowloris-mode    silent|drip              (기본 silent)
           --help
         종료 코드: 0 PASS · 1 FAIL · 2 사용법/구성 오류 · 3 지속시간 전 중단
         """;
@@ -159,6 +240,14 @@ public sealed record LoadTestOptions
 
                 case "--no-telemetry":
                     result = result with { NoTelemetry = true };
+                    continue;
+
+                case "--capacity":
+                    result = result with { Capacity = true };
+                    continue;
+
+                case "--churn":
+                    result = result with { Churn = true };
                     continue;
             }
 
@@ -303,10 +392,115 @@ public sealed record LoadTestOptions
                     result = result with { MaxLogMb = maxLog };
                     break;
 
+                case "--workers":
+                    if (!TryParsePositiveInt(value, out int workers)) { error = $"--workers 값이 잘못됨: {value}"; return false; }
+                    result = result with { Workers = workers };
+                    break;
+
+                case "--role":
+                    if (value is not ("auto" or "coordinator" or "worker"))
+                    {
+                        error = $"--role은 auto|coordinator|worker여야 합니다: {value}";
+                        return false;
+                    }
+                    result = result with { Role = value };
+                    break;
+
+                case "--worker-index":
+                    if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int workerIdx) || workerIdx < 0)
+                    { error = $"--worker-index 값이 잘못됨: {value}"; return false; }
+                    result = result with { WorkerIndex = workerIdx };
+                    break;
+
+                case "--port-count":
+                    if (!TryParsePositiveInt(value, out int portCount) || portCount > 64)
+                    { error = $"--port-count 값이 잘못됨(1..64): {value}"; return false; }
+                    result = result with { PortCount = portCount };
+                    break;
+
+                case "--client-index-offset":
+                    if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int offset) || offset < 0)
+                    { error = $"--client-index-offset 값이 잘못됨: {value}"; return false; }
+                    result = result with { ClientIndexOffset = offset };
+                    break;
+
+                case "--target-concurrent":
+                    if (!TryParsePositiveInt(value, out int target)) { error = $"--target-concurrent 값이 잘못됨: {value}"; return false; }
+                    result = result with { TargetConcurrent = target };
+                    break;
+
+                case "--source-port-base":
+                    if (!TryParsePort(value, out int srcBase)) { error = $"--source-port-base 값이 잘못됨: {value}"; return false; }
+                    result = result with { SourcePortBase = srcBase };
+                    break;
+
+                case "--stress":
+                    switch (value)
+                    {
+                        case "burst": result = result with { Stress = StressScenarioKind.Burst }; break;
+                        case "churn": result = result with { Stress = StressScenarioKind.Churn }; break;
+                        case "malformed": result = result with { Stress = StressScenarioKind.Malformed }; break;
+                        case "slowloris": result = result with { Stress = StressScenarioKind.Slowloris }; break;
+                        default: error = $"--stress는 burst|churn|malformed|slowloris여야 합니다: {value}"; return false;
+                    }
+                    break;
+
+                case "--probe-clients":
+                    if (!TryParsePositiveInt(value, out int probe)) { error = $"--probe-clients 값이 잘못됨: {value}"; return false; }
+                    result = result with { ProbeClients = probe };
+                    break;
+
+                case "--stress-clients":
+                    if (!TryParsePositiveInt(value, out int stressClients)) { error = $"--stress-clients 값이 잘못됨: {value}"; return false; }
+                    result = result with { StressClients = stressClients };
+                    break;
+
+                case "--stress-target":
+                    if (!TryParsePositiveInt(value, out int stressTarget)) { error = $"--stress-target 값이 잘못됨: {value}"; return false; }
+                    result = result with { StressTarget = stressTarget };
+                    break;
+
+                case "--baseline-duration":
+                    if (!TryParseDuration(value, out var baseline)) { error = $"--baseline-duration 값이 잘못됨: {value}"; return false; }
+                    result = result with { BaselineDuration = baseline };
+                    break;
+
+                case "--stress-duration":
+                    if (!TryParseDuration(value, out var stressDur)) { error = $"--stress-duration 값이 잘못됨: {value}"; return false; }
+                    result = result with { StressDuration = stressDur };
+                    break;
+
+                case "--recovery-duration":
+                    if (!TryParseDuration(value, out var recovery)) { error = $"--recovery-duration 값이 잘못됨: {value}"; return false; }
+                    result = result with { RecoveryDuration = recovery };
+                    break;
+
+                case "--probe-ping-interval":
+                    if (!TryParseDuration(value, out var probePing)) { error = $"--probe-ping-interval 값이 잘못됨: {value}"; return false; }
+                    result = result with { ProbePingInterval = probePing };
+                    break;
+
+                case "--slowloris-mode":
+                    if (value is not ("silent" or "drip")) { error = $"--slowloris-mode는 silent|drip여야 합니다: {value}"; return false; }
+                    result = result with { SlowlorisMode = value };
+                    break;
+
                 default:
                     error = $"알 수 없는 옵션: {arg}";
                     return false;
             }
+        }
+
+        // 교차 검증: 워커 인덱스는 워커 수 미만, 게임 포트 범위는 65535 이내.
+        if (result.WorkerIndex >= result.Workers)
+        {
+            error = $"--worker-index({result.WorkerIndex})는 --workers({result.Workers}) 미만이어야 합니다.";
+            return false;
+        }
+        if (result.GamePort + result.PortCount - 1 > 65535)
+        {
+            error = $"게임 포트 범위가 65535를 초과합니다(--game-port {result.GamePort} + --port-count {result.PortCount}).";
+            return false;
         }
 
         options = result;

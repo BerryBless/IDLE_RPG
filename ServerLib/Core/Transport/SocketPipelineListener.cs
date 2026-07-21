@@ -104,6 +104,9 @@ internal sealed class SocketPipelineListener : IServerListener
     /// </remarks>
     public TimeSpan? SessionSendTimeout { get; set; }
 
+    /// <summary>이후 수락되는 각 세션에 적용할 초당 최대 프레임 수(악성 플러드 방어). null이면 무제한.</summary>
+    public int? SessionMaxFramesPerSecond { get; set; }
+
     private int? _maxConnections;
     public int? MaxConnections
     {
@@ -297,7 +300,11 @@ internal sealed class SocketPipelineListener : IServerListener
                 SocketPipelineSession session;
                 try
                 {
-                    session = new SocketPipelineSession(clientSocket) { SendTimeout = SessionSendTimeout };
+                    session = new SocketPipelineSession(clientSocket)
+                    {
+                        SendTimeout = SessionSendTimeout,
+                        MaxFramesPerSecond = SessionMaxFramesPerSecond,
+                    };
                     session.OnReceived = data => OnReceived?.Invoke(session, data) ?? ValueTask.CompletedTask;
                     session.OnReceiveError = ex => OnClientError?.Invoke(session, ex) ?? ValueTask.CompletedTask;
                     session.OnDisconnected = async () =>

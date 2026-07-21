@@ -124,4 +124,49 @@ public class LoadTestOptionsTests
         Assert.Null(options);
         Assert.Null(error);
     }
+
+    [Fact]
+    public void 용량하네스_옵션_파싱()
+    {
+        string[] args =
+        [
+            "--workers", "8", "--role", "coordinator", "--port-count", "8",
+            "--capacity", "--target-concurrent", "300000", "--clients", "300000",
+        ];
+        Assert.True(LoadTestOptions.TryParse(args, out var options, out _));
+        Assert.Equal(8, options!.Workers);
+        Assert.Equal("coordinator", options.Role);
+        Assert.Equal(8, options.PortCount);
+        Assert.True(options.Capacity);
+        Assert.Equal(300000, options.TargetConcurrent);
+    }
+
+    [Fact]
+    public void 워커옵션_파싱()
+    {
+        string[] args = ["--role", "worker", "--worker-index", "3", "--workers", "8", "--client-index-offset", "112500"];
+        Assert.True(LoadTestOptions.TryParse(args, out var options, out _));
+        Assert.Equal("worker", options!.Role);
+        Assert.Equal(3, options.WorkerIndex);
+        Assert.Equal(112500, options.ClientIndexOffset);
+    }
+
+    [Theory]
+    [InlineData("--worker-index", "8", "--workers", "8")] // index >= workers
+    [InlineData("--port-count", "0", "--role", "auto")]   // port-count < 1
+    [InlineData("--port-count", "65", "--role", "auto")]  // port-count > 64
+    [InlineData("--role", "banana", "--workers", "2")]    // invalid role
+    public void 용량옵션_무효값_실패(string a, string b, string c, string d)
+    {
+        Assert.False(LoadTestOptions.TryParse([a, b, c, d], out var options, out var error));
+        Assert.Null(options);
+        Assert.NotNull(error);
+    }
+
+    [Fact]
+    public void 게임포트범위_65535초과_실패()
+    {
+        Assert.False(LoadTestOptions.TryParse(["--game-port", "65530", "--port-count", "10"], out _, out var error));
+        Assert.NotNull(error);
+    }
 }

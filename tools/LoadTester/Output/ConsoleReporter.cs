@@ -12,7 +12,7 @@ namespace LoadTester.Output;
 /// 스레드만 호출한다. <b>[Blocking:]</b> 콘솔 버퍼 동기 쓰기(수 µs). Windows QuickEdit 모드에서
 /// 텍스트 선택 시 쓰기가 정지될 수 있으므로 장기 실행 시 QuickEdit 비활성화를 권장한다.
 /// </remarks>
-public sealed class ConsoleReporter
+public sealed class ConsoleReporter : IIntervalReporter
 {
     private readonly TimeSpan _reportInterval;
 

@@ -104,6 +104,15 @@ internal sealed class SocketPipelineSession : ISession
     /// </remarks>
     public TimeSpan? SendTimeout { get; set; }
 
+    /// <summary>세션당 초당 최대 완전 패킷(프레임) 수. <see langword="null"/>(기본)이면 무제한.
+    /// 초과 시 해당 세션만 정상 종료(악성 프레임 플러드 방어) — 정상 클라(인증 1회 + 주기적 PING)는
+    /// 여유 있게 하회한다. <see cref="StartReceiving"/> 전에 설정해야 한다(수신 루프 전용 필드라 무동기).</summary>
+    public int? MaxFramesPerSecond { get; set; }
+
+    // 프레임 레이트 리밋용 고정 1초 윈도우. ReadPipeAsync(단일 수신 스레드)만 접근하므로 동기화 불필요.
+    private long _frameWindowStartTicks;
+    private int _frameCountInWindow;
+
     public SocketPipelineSession(Socket socket)
     {
         _socket = socket;
@@ -186,7 +195,32 @@ internal sealed class SocketPipelineSession : ISession
                 {
                     // B3: 완전한 패킷이 프레이밍될 때만 진척 시각을 갱신한다(PING 포함). 바이트만 흘리고 패킷을
                     // 완성하지 않는 trickle 공격은 이 값을 갱신하지 못해 유휴 스윕에 정리된다(byte 기준 LastReceivedAt과 구분).
-                    Volatile.Write(ref _lastProgressAtTicks, DateTimeOffset.UtcNow.UtcTicks);
+                    long nowTicks = DateTimeOffset.UtcNow.UtcTicks;
+                    Volatile.Write(ref _lastProgressAtTicks, nowTicks);
+
+                    // 프레임 레이트 리밋(opt-in): 고정 1초 윈도우에서 완전 패킷 수가 상한을 넘으면 이 세션만
+                    // 정상 종료한다. 위 nowTicks를 재사용해 추가 UtcNow 호출이 없다 — 정상 트래픽엔 필드 2개
+                    // 비교/증가뿐(무할당·무동기, 이 루프 단일 스레드 전용). 악성 프레임 플러드를 즉시 끊어
+                    // 재접속 오버헤드를 강제하므로 CPU/GC 부하를 근본 차단한다.
+                    if (MaxFramesPerSecond is int maxFps)
+                    {
+                        if (nowTicks - _frameWindowStartTicks >= TimeSpan.TicksPerSecond)
+                        {
+                            _frameWindowStartTicks = nowTicks;
+                            _frameCountInWindow = 0;
+                        }
+                        if (++_frameCountInWindow > maxFps)
+                        {
+                            var rateError = OnReceiveError;
+                            if (rateError != null)
+                            {
+                                try { await rateError(new InvalidOperationException(
+                                    $"세션 프레임 레이트 초과({_frameCountInWindow} > {maxFps}/s) — 악성 플러드로 간주해 종료")).ConfigureAwait(false); }
+                                catch { /* 통지 실패 무시 — 세션 정리는 계속 */ }
+                            }
+                            return; // finally → OnDisconnected → DisposeAsync로 소켓·루프 정리
+                        }
+                    }
                     try
                     {
                         await DispatchPacketAsync(packet, packetId);

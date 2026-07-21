@@ -48,6 +48,8 @@ internal sealed class SocketPipelineClient : IClientConnection
     /// </list>
     /// </remarks>
     public TimeSpan? SendTimeout { get; set; }
+    // 소스 엔드포인트 바인딩용(대규모 부하 생성 시 소스 포트 재사용). null이면 OS 자동 임시 포트 할당.
+    public System.Net.IPEndPoint? LocalEndPoint { get; set; }
     // Volatile.Read: 수신 루프(writer)와 앱(reader) 간 최신 RTT 가시성 보장
     public TimeSpan Rtt => new TimeSpan(Volatile.Read(ref _rttTicks));
     // E3: 콜백은 ConnectAsync() 전에만 설정 — 연결 후 재할당을 막아 수신 루프 가시성/일관성 보장.
@@ -91,6 +93,16 @@ internal sealed class SocketPipelineClient : IClientConnection
 
         _socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
         _socket.NoDelay = true;  // Nagle 알고리즘 비활성화 — 소량 실시간 패킷의 ~200ms 지연 방지 (클라이언트도 저지연 필수)
+
+        // LocalEndPoint 지정 시: SO_REUSEADDR로 같은 소스 포트를 서로 다른 목적지 포트에 재사용할 수
+        // 있게 한 뒤 바인드한다. Windows는 기본 connect()에서 소스 포트를 목적지 간 재사용하지 않아
+        // 단일 소스 IP 임시 포트 풀(~수만)이 전역 상한이 되지만, 명시적 바인드+SO_REUSEADDR면 4-튜플
+        // (srcPort, dstPort) 유일성만 지키면 소스 포트를 P개 목적지 포트에 재사용해 상한을 P배로 넓힌다.
+        if (LocalEndPoint is not null)
+        {
+            _socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            _socket.Bind(LocalEndPoint);
+        }
 
         // ConnectAsync: DNS 해석(호스트명일 때)+TCP 3-way 핸드셰이크를 비동기로 — 동기 Connect()의 스레드 블로킹 회피
         await _socket.ConnectAsync(host, port, cancellationToken);
