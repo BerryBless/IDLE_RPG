@@ -4,7 +4,6 @@ global using BigNumber = double;
 
 using System.Net;
 using System.Runtime.InteropServices;
-using System.Text;
 using GameServer.Items;
 using GameServer.Systems;
 using ServerLib;
@@ -137,45 +136,19 @@ var binder = new SessionPlayerBinder(levelSystem, sink);
 // 없으면 소스에 하드코딩된(=공개 저장소에 노출된) 개발용 기본키로 조용히 폴백해, 운영에서 설정을
 // 빠뜨리면 그 알려진 키로 누구나 토큰을 위조해 인증 게이트를 완전히 우회할 수 있었다. 이제 Release
 // 빌드에서는 폴백 없이 즉시 실패(fail-fast)하고, 어떤 경로든 32바이트 미만 키는 거부한다
-// (AuthServerConfig.cs의 ResolveHmacSecret과 정책·상수를 동일하게 미러링 — 공유 상수화는 별도
-// Medium 발견, 이번 Critical/High 수정 범위 밖).
+// 해석 정책(env 우선 → DEBUG 폴백 → Release fail-fast → 32바이트 검증)은 ServerLib의 공용
+// HmacSecretResolver로 AuthServer·LoadTester와 단일 소스를 공유한다(이전의 4중 복제 통합 — 코드리뷰 Medium).
 var hmacSecret = ResolveHmacSecret();
 Console.WriteLine("[초기화] HMAC 토큰 검증 키 로드 완료.");
 
 static byte[] ResolveHmacSecret()
 {
-    const int MinHmacSecretBytes = 32; // NIST SP 800-107: HMAC 키 길이는 해시 출력 크기(SHA-256=32B) 이상 권장
-    string? fromEnv = Environment.GetEnvironmentVariable("IDLERPG_AUTH_HMAC_SECRET");
-    string secretText;
-    if (fromEnv is not null)
-    {
-        secretText = fromEnv;
-    }
-    else
-    {
-#if DEBUG
-        // DEBUG 전용 폴백: 로컬 dotnet run 편의를 위해 유지하되, Release 빌드에서는 아래 #else로
-        // 완전히 배제된다(컴파일 시점에 코드 자체가 어셈블리에 남지 않음).
+    if (!HmacSecretResolver.TryResolve(out byte[] secret, out var source, out string? error))
+        throw new InvalidOperationException(error);
+    if (source == HmacSecretResolver.SecretSource.DevFallback)
         Console.WriteLine(
             "[경고] IDLERPG_AUTH_HMAC_SECRET 환경 변수가 없어 개발용 기본 비밀키를 사용합니다. " +
             "AuthServer도 동일한 값을 써야 발급된 토큰이 검증됩니다(AuthServer/Program.cs 경고 참고).");
-        secretText = "dev-only-insecure-hmac-secret-change-me";
-#else
-        throw new InvalidOperationException(
-            "IDLERPG_AUTH_HMAC_SECRET 환경 변수가 설정되지 않았습니다. Release 빌드에서는 개발용 기본 비밀키를 " +
-            "사용할 수 없습니다 — 해당 문자열은 공개 저장소 소스에 그대로 노출되어 있어, 그 값을 그대로 쓰면 " +
-            "공격자가 AuthServer가 발급한 것처럼 유효 토큰을 위조해 인증 게이트를 완전히 우회할 수 있습니다. " +
-            "배포 전 이 환경 변수를 32바이트 이상의 고엔트로피 값으로 설정하세요.");
-#endif
-    }
-
-    byte[] secret = Encoding.UTF8.GetBytes(secretText);
-    if (secret.Length < MinHmacSecretBytes)
-    {
-        throw new InvalidOperationException(
-            $"IDLERPG_AUTH_HMAC_SECRET이 너무 짧습니다({secret.Length}바이트, 최소 {MinHmacSecretBytes}바이트 필요). " +
-            "HMAC-SHA256 키는 해시 출력 크기 이상의 엔트로피를 가져야 안전합니다.");
-    }
     return secret;
 }
 // HmacAuthTokenCodec: 발급(IAuthTokenIssuer)도 구현하지만 GameServer는 검증(IAuthTokenValidator)만
@@ -202,7 +175,6 @@ var telemetryRegistry = ServerNet.CreateSessionRegistry();
 var gameListeners = new IServerListener[gamePortCount];
 for (int p = 0; p < gamePortCount; p++)
     gameListeners[p] = ServerNet.CreateListener(registry);
-IServerListener listener = gameListeners[0]; // ConsoleStatusReporter·TelemetryPublisher 기존 배선 유지용 대표 인스턴스
 
 // 텔레메트리 리스너: 게임 리스너와 별개의 IServerListener 인스턴스. OnReceived를 배선하지 않으므로
 // 모니터 프로세스가 무언가를 보내도 조용히 무시된다(읽기 전용 구독 전용 — 게임 프로토콜과 무관).
@@ -210,8 +182,8 @@ IServerListener telemetryListener = ServerNet.CreateListener(telemetryRegistry);
 Console.WriteLine("[초기화] 세션 레지스트리 2개 + 리스너 2개 생성 완료(아직 포트를 열지는 않음).");
 
 // TelemetryPublisher: RaidEncounter의 onStep을 SessionRaidRunner가 RaidBroadcaster와 함께 팬아웃
-// 구독하도록 아래 raidRunner 생성자에 주입한다. 게임 리스너(listener)의 ActiveSessionCount/IsRunning/
-// TotalRejectedConnections를 읽고, telemetryRegistry로 접속한 모니터 전원에게 브로드캐스트한다.
+// 구독하도록 아래 raidRunner 생성자에 주입한다. 게임 리스너들(gameListeners)의 ActiveSessionCount/IsRunning/
+// TotalRejectedConnections를 합산해 읽고, telemetryRegistry로 접속한 모니터 전원에게 브로드캐스트한다.
 var telemetryPublisher = new TelemetryPublisher(gameListeners, telemetryRegistry);
 
 // SessionRaidRunner: binder가 부착한 Player를 읽어 시작 장비를 착용시키고, 공유 레이드 보스(7001)에
@@ -350,7 +322,8 @@ Console.WriteLine($"[가동] 텔레메트리 리스너 시작 -> {bindAddress}:{
 // 발생한다(클래스 remarks 참고). Fire-and-forget: cts.Token이 취소되면 루프가 스스로 정리된다.
 if (consoleStatusIntervalSeconds > 0)
 {
-    var consoleReporter = new ConsoleStatusReporter(listener, sink, Console.Out,
+    // gameListeners 전체를 넘겨 멀티포트(용량 모드) 시 전 포트 접속 수를 합산한다(TelemetryPublisher와 동일).
+    var consoleReporter = new ConsoleStatusReporter(gameListeners, sink, Console.Out,
         interval: TimeSpan.FromSeconds(consoleStatusIntervalSeconds));
     _ = consoleReporter.Start(cts.Token);
     Console.WriteLine($"[가동] 콘솔 상태 리포터 시작 (주기 {consoleStatusIntervalSeconds}s, 유휴 heartbeat 60s).");

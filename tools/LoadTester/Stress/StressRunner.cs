@@ -186,25 +186,17 @@ public static class StressRunner
         Console.WriteLine(sb.ToString());
     }
 
-    // GameServer/Main.cs·Program.cs의 ResolveHmacSecret과 동일 정책(env 우선, DEBUG만 폴백).
+    // 해석 정책은 ServerLib 공용 HmacSecretResolver로 GameServer·AuthServer·Program.cs와 단일 소스를 공유한다
+    // (이전 4중 복제 통합 — 코드리뷰 Medium). 32바이트 검증도 리졸버가 담당.
     private static byte[]? ResolveHmacSecret()
     {
-        string? fromEnv = Environment.GetEnvironmentVariable("IDLERPG_AUTH_HMAC_SECRET");
-        string secretText;
-        if (fromEnv is not null)
+        if (!HmacSecretResolver.TryResolve(out byte[] secret, out var source, out string? error))
         {
-            secretText = fromEnv;
-        }
-        else
-        {
-#if DEBUG
-            Console.WriteLine("[경고] IDLERPG_AUTH_HMAC_SECRET 없어 개발용 기본 비밀키 사용(대상 서버도 DEBUG 폴백이어야 함).");
-            secretText = "dev-only-insecure-hmac-secret-change-me";
-#else
-            Console.Error.WriteLine("[오류] IDLERPG_AUTH_HMAC_SECRET 미설정 — Release에서는 폴백 없음.");
+            Console.Error.WriteLine($"[오류] {error}");
             return null;
-#endif
         }
-        return Encoding.UTF8.GetBytes(secretText);
+        if (source == HmacSecretResolver.SecretSource.DevFallback)
+            Console.WriteLine("[경고] IDLERPG_AUTH_HMAC_SECRET 없어 개발용 기본 비밀키 사용(대상 서버도 DEBUG 폴백이어야 함).");
+        return secret;
     }
 }

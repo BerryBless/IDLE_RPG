@@ -177,27 +177,18 @@ if (userAborted)
     return 3;
 return verdict.Passed ? 0 : 1;
 
-// GameServer/Main.cs의 ResolveHmacSecret과 동일 정책 미러링: env 우선, DEBUG 빌드만 개발용 폴백.
-// 대상 GameServer가 로드한 비밀키와 일치해야 토큰이 검증을 통과한다.
+// 해석 정책은 ServerLib 공용 HmacSecretResolver로 GameServer·AuthServer와 단일 소스를 공유한다
+// (이전 4중 복제 통합 — 코드리뷰 Medium). 32바이트 최소 길이 검증도 리졸버가 담당해, 이전에 LoadTester만
+// 이 검증을 빠뜨렸던 정책 드리프트(보안 Low)가 함께 해소된다. 대상 GameServer가 로드한 키와 일치해야 검증 통과.
 static byte[]? ResolveHmacSecret()
 {
-    string? fromEnv = Environment.GetEnvironmentVariable("IDLERPG_AUTH_HMAC_SECRET");
-    string secretText;
-    if (fromEnv is not null)
+    if (!HmacSecretResolver.TryResolve(out byte[] secret, out var source, out string? error))
     {
-        secretText = fromEnv;
+        Console.Error.WriteLine($"[오류] {error}");
+        return null;
     }
-    else
-    {
-#if DEBUG
+    if (source == HmacSecretResolver.SecretSource.DevFallback)
         Console.WriteLine("[경고] IDLERPG_AUTH_HMAC_SECRET 환경 변수가 없어 개발용 기본 비밀키를 사용합니다. " +
                           "대상 GameServer(DEBUG 빌드)도 동일 폴백을 써야 인증이 통과됩니다.");
-        secretText = "dev-only-insecure-hmac-secret-change-me";
-#else
-        Console.Error.WriteLine("[오류] IDLERPG_AUTH_HMAC_SECRET 환경 변수가 설정되지 않았습니다. " +
-                                "Release 빌드에서는 개발용 기본 비밀키를 사용하지 않습니다.");
-        return null;
-#endif
-    }
-    return Encoding.UTF8.GetBytes(secretText);
+    return secret;
 }

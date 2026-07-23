@@ -67,6 +67,13 @@ services:
       IDLERPG_GAME_TELEMETRY_PORT: "7779"
       # authserver와 반드시 동일한 값 — 공유 시크릿(네트워크 통신 없이 토큰만으로 검증).
       IDLERPG_AUTH_HMAC_SECRET: ${IDLERPG_AUTH_HMAC_SECRET:?IDLERPG_AUTH_HMAC_SECRET을 .env에 설정하세요(.env.example 참고, 32바이트 이상)}
+      # [DoS 하드닝 — 운영 시 반드시 검토] 아래 3종은 opt-in이라 미설정 시 기존 동작(무제한)을 보존한다.
+      # 스트레스 하네스(plan/stress_harness_0721.md)가 실증하듯 미설정 배포는 slowloris·오버사이즈 헤더
+      # 증폭·프레임 플러드·연결 폭주에 그대로 노출된다(코드리뷰 Medium, CWE-770). 값은 배포 규모·머신에
+      # 따라 다르고 과소 설정은 정상 트래픽을 끊으므로 하드 기본값 대신 예시로 제공한다 — 운영 전 조정 후 주석 해제.
+      #   IDLERPG_GAME_MAX_CONNECTIONS: "50000"        # 동시 연결 상한(머신 용량에 맞춰 조정)
+      #   IDLERPG_GAME_MAX_FRAMES_PER_SECOND: "100"     # 세션당 초당 프레임 상한(정상 클라는 인증 1회+주기 PING이라 여유 하회)
+      #   IDLERPG_GAME_IDLE_TIMEOUT_SECONDS: "120"      # 진행 기준 유휴 스윕 — 클라 PING 주기보다 커야 정상 연결 오판 없음(하트비트 프로토콜 도입 후 활성화 권장)
     ports:
       - "7777:7777" # 게임 포트만 publish. 7779(텔레메트리)는 의도적으로 publish하지 않음.
     networks: [idlerpg-net]

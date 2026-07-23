@@ -13,8 +13,10 @@ internal sealed class SocketPipelineClient : IClientConnection
     private static readonly int MinBufferSize = 4096;
 
     // PipeOptions(useSynchronizationContext:false): 클라이언트는 특히 위험하다 — ConnectAsync를 UI 스레드에서 await하면
-    // 기본값(true)에서 FillPipe/ReadPipe의 모든 continuation이 그 UI 스레드에 고정되어 데드락한다(ConfigureAwait로는 못 막음).
+    // 기본값(true)에서 FillPipe/ReadPipe의 Pipe continuation이 그 UI 스레드에 고정되어 데드락한다(ConfigureAwait로는 못 막음).
     // continuation을 ThreadPool에서 실행하도록 강제. 전 연결 공유라 static readonly 1회 생성.
+    // 단, 이 옵션은 Pipe(Flush/Read) continuation만 커버한다 — 소켓 await(ConnectAsync/ReceiveAsync)와 사용자 콜백
+    // (OnConnected/OnReceived/OnDisconnected) await은 별도로 ConfigureAwait(false)를 명시해 SyncContext 재개를 차단한다.
     private static readonly PipeOptions s_pipeOptions = new(useSynchronizationContext: false);
 
     private Socket? _socket;
@@ -44,7 +46,8 @@ internal sealed class SocketPipelineClient : IClientConnection
     /// 연결 수명 동안 1개만 두고 <see cref="CancellationTokenSource.TryReset"/>로 매 송신 재사용합니다(송신 게이트가 동시 송신 1건을 보장).</description></item>
     /// <item><description><b>Cancellation 계약:</b> 설정 시 <see cref="SendAsync"/>의 <c>cancellationToken</c>은 송신 게이트 대기를 취소합니다.
     /// 이미 시작된(in-flight) 소켓 쓰기는 caller 토큰이 아니라 이 시한으로 bound됩니다(즉시 끊기지 않고 시한 내로 종료).</description></item>
-    /// <item><description><b>Thread Safety:</b> Thread-safe(단순 참조 읽기/쓰기).</description></item>
+    /// <item><description><b>Thread Safety:</b> Not thread-safe. <see cref="ConnectAsync"/> 전에 설정해야 한다.
+    /// <see cref="TimeSpan"/>?는 멀티워드 구조체라 런타임 재설정 시 I/O 스레드에서 torn read가 가능하므로 설정 시점을 연결 이전으로 제한한다.</description></item>
     /// </list>
     /// </remarks>
     public TimeSpan? SendTimeout { get; set; }
@@ -105,7 +108,9 @@ internal sealed class SocketPipelineClient : IClientConnection
         }
 
         // ConnectAsync: DNS 해석(호스트명일 때)+TCP 3-way 핸드셰이크를 비동기로 — 동기 Connect()의 스레드 블로킹 회피
-        await _socket.ConnectAsync(host, port, cancellationToken);
+        // ConfigureAwait(false): 소켓 await는 PipeOptions(useSynchronizationContext:false)가 커버하지 못하므로,
+        // 호출자가 SyncContext 스레드에서 ConnectAsync를 동기 대기할 때의 데드락을 개별 await에서 직접 차단한다.
+        await _socket.ConnectAsync(host, port, cancellationToken).ConfigureAwait(false);
 
         _pipe = new Pipe(s_pipeOptions);
         _cts = new CancellationTokenSource();
@@ -119,7 +124,7 @@ internal sealed class SocketPipelineClient : IClientConnection
             _ = PingLoopAsync(PingInterval.Value, _cts.Token);
 
         if (OnConnected != null)
-            await OnConnected();
+            await OnConnected().ConfigureAwait(false);
     }
 
     // Zero-copy: 소켓 → PipeWriter
@@ -132,12 +137,12 @@ internal sealed class SocketPipelineClient : IClientConnection
             {
                 // GetMemory + ReceiveAsync(Memory): PipeWriter 풀 버퍼에 커널이 직접 수신 — byte[] 오버로드와 달리 수신마다 무할당(zero-copy)
                 var memory = writer.GetMemory(MinBufferSize);
-                int bytesRead = await _socket!.ReceiveAsync(memory, SocketFlags.None, ct);
+                int bytesRead = await _socket!.ReceiveAsync(memory, SocketFlags.None, ct).ConfigureAwait(false);
                 if (bytesRead == 0) break; // 0바이트 = 서버의 정상 종료
 
                 writer.Advance(bytesRead); // 쓰기 위치만 커밋
                 // FlushAsync: reader를 깨우고 백프레셔 적용 — reader가 느리면 수신을 멈춰 Pipe 무한 증가 방지. IsCompleted로 종료 감지
-                var flush = await writer.FlushAsync(ct);
+                var flush = await writer.FlushAsync(ct).ConfigureAwait(false);
                 if (flush.IsCompleted) break;
             }
         }
@@ -145,7 +150,7 @@ internal sealed class SocketPipelineClient : IClientConnection
         catch (SocketException) { }
         finally
         {
-            await writer.CompleteAsync();
+            await writer.CompleteAsync().ConfigureAwait(false);
         }
     }
 
@@ -156,10 +161,10 @@ internal sealed class SocketPipelineClient : IClientConnection
         var buf = ArrayPool<byte>.Shared.Rent(HeartbeatProtocol.MaxPacketSize);
         try
         {
-            while (await timer.WaitForNextTickAsync(ct))
+            while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
             {
                 int written = HeartbeatProtocol.BuildPing(DateTimeOffset.UtcNow.UtcTicks, buf);
-                try { await SendAsync(buf.AsMemory(0, written), ct); }
+                try { await SendAsync(buf.AsMemory(0, written), ct).ConfigureAwait(false); }
                 catch (ObjectDisposedException) { break; }
                 catch (System.Net.Sockets.SocketException) { }
             }
@@ -192,7 +197,7 @@ internal sealed class SocketPipelineClient : IClientConnection
             while (!ct.IsCancellationRequested)
             {
                 // ReadAsync가 돌려주는 ReadOnlySequence는 Pipe 세그먼트를 그대로 참조(zero-copy)
-                var result = await reader.ReadAsync(ct);
+                var result = await reader.ReadAsync(ct).ConfigureAwait(false);
                 var buffer = result.Buffer;
                 var consumed = buffer.Start;
                 var examined = buffer.End;
@@ -211,7 +216,7 @@ internal sealed class SocketPipelineClient : IClientConnection
                         // Fast-path: 대부분 패킷은 단일 세그먼트(연속 메모리) → ArrayPool 대여 없이 그대로 콜백(무할당)
                         if (packet.IsSingleSegment)
                         {
-                            await OnReceived(packet.First);
+                            await OnReceived(packet.First).ConfigureAwait(false);
                         }
                         else
                         {
@@ -221,7 +226,7 @@ internal sealed class SocketPipelineClient : IClientConnection
                             try
                             {
                                 packet.CopyTo(rented);
-                                await OnReceived(rented.AsMemory(0, length));
+                                await OnReceived(rented.AsMemory(0, length)).ConfigureAwait(false);
                             }
                             finally
                             {
@@ -240,9 +245,9 @@ internal sealed class SocketPipelineClient : IClientConnection
         catch (OperationCanceledException) { }
         finally
         {
-            await reader.CompleteAsync();
+            await reader.CompleteAsync().ConfigureAwait(false);
             if (OnDisconnected != null)
-                await OnDisconnected();
+                await OnDisconnected().ConfigureAwait(false);
         }
     }
 
@@ -321,7 +326,12 @@ internal sealed class SocketPipelineClient : IClientConnection
         if (_cts != null) await _cts.CancelAsync().ConfigureAwait(false);
         _socket?.Dispose();
         _cts?.Dispose();
-        _sendGate.Dispose();
-        _sendTimeoutCts?.Dispose(); // 재사용 송신 시한 CTS 해제(진행 중 송신과의 경합은 _sendGate.Dispose와 동일 저위험 race)
+        // _sendGate·_sendTimeoutCts는 의도적으로 Dispose하지 않는다(다시 넣지 말 것).
+        // 유휴 스윕/Disconnect 등 다른 스레드가 DisposeAsync를 호출하는 동안 PING 루프·앱 SendAsync가
+        // _sendGate.WaitAsync에서 대기 중이면, SemaphoreSlim.Dispose()는 대기자를 깨우지 않아 그 송신 태스크가
+        // 영구 미완료(고아)로 남는다. Dispose를 생략하면 보유자의 finally { Release() }가 항상 성공해 대기자를 깨우고,
+        // 대기자는 파괴된 소켓에서 즉시 실패(fail-fast)로 정상 종료한다. 이 게이트는 AvailableWaitHandle을 쓰지 않아
+        // 해제할 비관리 자원이 없다(GC로 회수). _sendTimeoutCts도 같은 이유 — 진행 중 보유자가 CancelAfter/.Token 접근 시
+        // ObjectDisposedException을 던지지 않도록 Dispose 생략(매 송신 finally에서 InfiniteTimeSpan으로 무장 해제되어 Timer 미발화).
     }
 }

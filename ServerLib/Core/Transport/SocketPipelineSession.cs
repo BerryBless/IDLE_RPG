@@ -99,7 +99,8 @@ internal sealed class SocketPipelineSession : ISession
     /// (송신 게이트가 세션당 동시 송신 1건을 보장하므로 안전). 직전 시한이 발화한 직후 송신에서만 드물게 1개를 재생성합니다.</description></item>
     /// <item><description><b>Cancellation 계약:</b> 설정 시 <see cref="SendAsync"/>의 <c>cancellationToken</c>은 송신 게이트 대기를 취소합니다.
     /// 단, 이미 시작된(in-flight) 소켓 쓰기는 caller 토큰이 아니라 이 시한으로 bound됩니다(즉시 끊기지 않고 시한 내로 종료). 시한 초과 시 <see cref="System.Net.Sockets.SocketException"/>(TimedOut).</description></item>
-    /// <item><description><b>Thread Safety:</b> Thread-safe(단순 참조 읽기/쓰기). <see cref="StartReceiving"/> 전후 어느 시점에든 설정 가능합니다.</description></item>
+    /// <item><description><b>Thread Safety:</b> Not thread-safe. <see cref="StartReceiving"/> 전에 설정해야 합니다.
+    /// <see cref="TimeSpan"/>?는 멀티워드 구조체라 런타임 재설정 시 I/O 스레드에서 torn read가 가능하므로 설정 시점을 수신 시작 이전으로 제한합니다.</description></item>
     /// </list>
     /// </remarks>
     public TimeSpan? SendTimeout { get; set; }
@@ -417,7 +418,13 @@ internal sealed class SocketPipelineSession : ISession
         _socket.Dispose();
         _cts.Dispose();
         Volatile.Write(ref _context, null); // 민감 데이터 잔류 방지 (CWE-212/459) — 사용자 컨텍스트 참조 해제
-        _sendGate.Dispose();
-        _sendTimeoutCts?.Dispose(); // 재사용 송신 시한 CTS 해제(진행 중 송신과의 경합은 _sendGate.Dispose와 동일 저위험 race)
+        // _sendGate·_sendTimeoutCts는 의도적으로 Dispose하지 않는다(다시 넣지 말 것).
+        // 유휴 스윕/Stop() 등 다른 스레드가 DisposeAsync를 호출하는 동안 자동 PONG 회신·앱 SendAsync(브로드캐스트)가
+        // _sendGate.WaitAsync에서 대기 중이면, SemaphoreSlim.Dispose()는 대기자를 깨우지 않아 그 송신 태스크가
+        // 영구 미완료(고아)로 남고 BroadcastAsync 드레인이 프로세스 종료까지 정지한다. Dispose를 생략하면 보유자의
+        // finally { Release() }가 항상 성공해 대기자를 깨우고, 대기자는 파괴된 소켓에서 즉시 실패(fail-fast)로 종료한다.
+        // 이 게이트는 AvailableWaitHandle을 쓰지 않아 해제할 비관리 자원이 없다(GC로 회수). _sendTimeoutCts도 같은 이유 —
+        // 진행 중 보유자가 CancelAfter/.Token 접근 시 ObjectDisposedException을 던지지 않도록 Dispose 생략(매 송신 finally에서
+        // InfiniteTimeSpan으로 무장 해제되어 Timer 미발화).
     }
 }

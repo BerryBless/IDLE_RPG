@@ -100,8 +100,14 @@ public sealed class MetricsSampler
                 continue;
             authenticated++;
 
-            // RTT 샘플링: 이벤트가 아닌 구간별 클라이언트 분포 — 판정 목적(백분위 임계치)에 정확하고
-            // I/O 스레드에 관측 부담을 전혀 주지 않는다.
+            // RTT 샘플링: 이벤트가 아닌 구간별 클라이언트 분포 — I/O 스레드에 관측 부담을 전혀 주지 않는다.
+            // [백분위 정의 주의] 매 구간마다 각 클라의 "마지막 측정 RTT"(snap.RttTicks, ServerLib가 PingInterval
+            // 주기로 갱신)를 무조건 1건 기록하므로, 산출되는 p50/p95/p99는 개별 PONG을 세는 "패킷 가중"이 아니라
+            // "연결·시간 가중" 백분위다(임의 시점에 무작위 연결이 관측하는 RTT 분포 = 95%의 연결·초가 RTT<X).
+            // PingInterval > ReportInterval이면 동일 RTT 값이 여러 구간에 중복 계수된다. 소크 테스트의 서버 건강
+            // 판정 목적에는 이 정의가 타당하나(순간 지연 스파이크가 아닌 지속 저하를 잡는다), PASS/FAIL 임계치
+            // (RttP95Max 등)를 패킷 가중으로 해석하면 어긋난다. 패킷 가중이 필요하면 PONG 수신 이벤트 시점에 기록하도록
+            // 전환할 것(코드리뷰 Medium, docs/code-reviews/2026-07-22-loadtest-stress-hardening-review.md).
             if (snap.RttTicks > 0)
             {
                 var rtt = TimeSpan.FromTicks(snap.RttTicks);
