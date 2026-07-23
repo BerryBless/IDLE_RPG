@@ -19,6 +19,17 @@ namespace WebClient;
 /// </remarks>
 public sealed class WebSocketBrowserChannel : IBrowserChannel
 {
+    // 조각 조립 총 바이트 상한(16KB): 이 프로토콜의 유일한 수신은 join JSON(수십 바이트)뿐이라
+    // 정상 트래픽은 단일 4KB 프레임 안에서 끝나 절대 이 한도에 닿지 않는다. 악성/오작동 클라이언트가
+    // EndOfMessage를 세우지 않고 4KB 조각을 무한히 흘려 MemoryStream을 무한 증폭시키는 메모리 고갈(DoS)을
+    // 차단하는 하드 캡 — GameServer 하드닝(프레임 레이트 리밋)과 대칭인 게이트웨이 경계 방어.
+    private const int MaxMessageBytes = 16 * 1024;
+
+    // 조각 개수 상한: 바이트 캡만으로는 빈/1바이트 조각을 무한히 보내는 플러드(바이트는 안 늘지만
+    // while 루프가 무한 회전 — 인증 후 wsWatch 루프엔 per-message 타임아웃도 없다)를 막지 못한다.
+    // 정상 메시지는 1프레임이며, <16KB 메시지를 4KB로 쪼개도 4~5프레임이라 64는 넉넉한 여유다.
+    private const int MaxFragments = 64;
+
     private readonly WebSocket _socket;
 
     // 4KB 고정 수신 버퍼: 기대 수신은 join JSON 1건(수십 바이트)뿐 — 조각(fragment) 수신 시에만
@@ -39,6 +50,7 @@ public sealed class WebSocketBrowserChannel : IBrowserChannel
     {
         // 대부분의 메시지는 단일 프레임으로 끝난다. EndOfMessage=false(조각)일 때만 스트림 승격.
         MemoryStream? assembled = null;
+        int fragmentCount = 0;
         while (true)
         {
             WebSocketReceiveResult result;
@@ -65,8 +77,36 @@ public sealed class WebSocketBrowserChannel : IBrowserChannel
 
             assembled ??= new MemoryStream();
             assembled.Write(_receiveBuffer, 0, result.Count);
+
+            // 총 바이트 또는 조각 개수 상한 초과 시 1009(MessageTooBig)로 즉시 끊고 수신 종료 —
+            // 접속당 조립 버퍼를 O(무제한)→O(1)로 고정하고, 진전 없는 조각 플러드의 무한 루프도 차단한다.
+            if (assembled.Length > MaxMessageBytes || ++fragmentCount > MaxFragments)
+            {
+                await CloseOversizedAsync(cancellationToken);
+                return null;
+            }
+
             if (result.EndOfMessage)
                 return Encoding.UTF8.GetString(assembled.GetBuffer(), 0, (int)assembled.Length);
+        }
+    }
+
+    /// <summary>조각 조립 상한을 넘긴 접속을 1009(MessageTooBig)로 종료합니다. 종료 경로이므로 예외는 조용히 삼킵니다.</summary>
+    private async ValueTask CloseOversizedAsync(CancellationToken cancellationToken)
+    {
+        if (_socket.State is not (WebSocketState.Open or WebSocketState.CloseReceived))
+            return;
+        try
+        {
+            await _socket.CloseAsync(WebSocketCloseStatus.MessageTooBig, "message too large", cancellationToken);
+        }
+        catch (WebSocketException)
+        {
+            // 상대가 이미 끊었을 수 있다 — 종료 경로이므로 조용히 무시.
+        }
+        catch (OperationCanceledException)
+        {
+            // 셧다운 중 취소 — 종료 경로이므로 조용히 무시.
         }
     }
 
