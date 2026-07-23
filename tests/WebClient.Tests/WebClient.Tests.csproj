@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\WebClient\WebClient.csproj" />
+    <!-- ServerLib: 브리지 통합 테스트가 ServerNet.CreateListener/CreateSessionRegistry로 실제
+         루프백 게임 리스너를 조립하고, HmacAuthTokenCodec으로 토큰 왕복을 검증하므로 명시 참조. -->
+    <ProjectReference Include="..\..\ServerLib\ServerLib.csproj" />
+    <!-- GameServer: 브리지 통합 테스트의 인프로세스 픽스처가 실제 프로덕션 인증 게이트
+         (SessionAuthGate)를 Main.cs와 동일하게 조립하기 위해 참조한다(FullStack.Tests와 동일 사유).
+         WebClient 본체는 여전히 ServerLib만 참조한다 — 테스트 픽스처 한정 의존. -->
+    <ProjectReference Include="..\..\GameServer\GameServer.csproj" />
+  </ItemGroup>
+
+</Project>

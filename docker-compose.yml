@@ -98,6 +98,29 @@ services:
       - "8080:8080"
     networks: [idlerpg-net]
 
+  webclient:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PROJECT: WebClient
+        RUNTIME_IMAGE: mcr.microsoft.com/dotnet/aspnet:10.0 # Microsoft.NET.Sdk.Web(ASP.NET Core) 필요.
+    restart: "no"
+    environment:
+      IDLERPG_WEBCLIENT_WEB_BIND: 0.0.0.0
+      IDLERPG_WEBCLIENT_WEB_PORT: "8081"
+      # 서비스명(gameserver)은 idlerpg-net 내부 DNS로 해석된다(monitorserver와 동일).
+      IDLERPG_WEBCLIENT_GAME_HOST: gameserver
+      IDLERPG_WEBCLIENT_GAME_PORT: "7777"
+      # gameserver와 반드시 동일한 값 — 게스트 토큰을 이 프로세스가 직접 발급(HmacAuthTokenCodec)하므로
+      # 시크릿이 다르면 모든 게스트 인증이 게이트에서 거부된다.
+      IDLERPG_AUTH_HMAC_SECRET: ${IDLERPG_AUTH_HMAC_SECRET:?IDLERPG_AUTH_HMAC_SECRET을 .env에 설정하세요(.env.example 참고, 32바이트 이상)}
+    depends_on:
+      - gameserver # soft 의존성: 없어도 기동은 되고, 입장 시 연결 오류를 브라우저에 안내한다.
+    ports:
+      - "8081:8081" # 게스트 플레이 페이지(브라우저 대면 포트만 publish).
+    networks: [idlerpg-net]
+
 volumes:
   mongo-data:
 

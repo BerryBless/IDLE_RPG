@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <!-- Microsoft.NET.Sdk.Web(FrameworkReference Microsoft.AspNetCore.App 내장)이 자동으로 launchSettings.json을
+             기대하지만 이 프로젝트는 콘솔 앱처럼 dotnet run으로만 구동하므로 생성하지 않는다(MonitorServer와 동일). -->
+        <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- 닉네임 정제 규칙(SanitizeNickname) 등 internal 헬퍼를 테스트가 직접 검증한다. -->
+        <InternalsVisibleTo Include="WebClient.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- ServerLib: 브라우저당 1개씩 ServerNet.CreateClient()로 GameServer 게임 포트(7777)에 접속하는
+             WebSocket↔TCP 브리지이므로 참조한다. WebClient는 GameServer 자체를 참조하지 않는다 —
+             필요한 패킷(AuthTokenPacket/MobHpPacket 등)과 HMAC 토큰 코덱이 모두 ServerLib(전송 계층)에
+             있어 게임 도메인을 끌어올 필요가 없다(MonitorServer.csproj와 동일한 레이어 경계 결정). -->
+        <ProjectReference Include="..\ServerLib\ServerLib.csproj" />
+    </ItemGroup>
+
+</Project>

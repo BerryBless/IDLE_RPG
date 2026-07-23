@@ -7,6 +7,7 @@ echo Prerequisite: a local MongoDB (mongod) must already be running on port 2701
 echo   AuthServer    : 127.0.0.1:7778
 echo   GameServer    : 127.0.0.1:7777 (telemetry 7779)
 echo   MonitorServer : http://127.0.0.1:8080
+echo   WebClient     : http://127.0.0.1:8081 (guest play page)
 echo.
 
 rem Build once up front (single dotnet build). ServerLib is shared by all three servers;
@@ -28,5 +29,6 @@ echo.
 start "IDLE_RPG - AuthServer" cmd /k "dotnet run --no-build --project AuthServer"
 start "IDLE_RPG - GameServer" cmd /k "dotnet run --no-build --project GameServer"
 start "IDLE_RPG - MonitorServer" cmd /k "dotnet run --no-build --project MonitorServer"
+start "IDLE_RPG - WebClient" cmd /k "dotnet run --no-build --project WebClient"
 
 popd
