@@ -17,6 +17,11 @@ internal sealed class SocketPipelineListener : IServerListener
     private readonly ConcurrentDictionary<IPAddress, int> _connectionsPerIp = new();
     private long _rejectedConnections; // Interlocked: 상한 초과 거부 누적(폭주 시 콜백 대신 카운터로 관측)
 
+    // 유휴 스윕이 OnIdleTimeout 사용자 콜백을 기다리는 시한. 이 스윕은 리스너당 하나뿐인 하드닝 방어 경로라,
+    // 콜백이 행(hang)하면 유휴 축출 자체가 무증상으로 영구 정지한다 → 방어적 상한. 관측용 콜백은 즉시 반환이 정상이라
+    // 넉넉히 잡아도 정상 콜백을 끊지 않는다. 초과 시 통지만 포기하고 세션 하드 종료(DisposeAsync)는 계속 진행한다.
+    private static readonly TimeSpan IdleCallbackTimeout = TimeSpan.FromSeconds(5);
+
     public bool IsRunning => _listenSocket != null;
 
     /// <summary>현재 활성 세션 수입니다. 세션 레지스트리·메트릭 토글과 무관하게 항상 사용 가능합니다.</summary>
@@ -103,6 +108,9 @@ internal sealed class SocketPipelineListener : IServerListener
     /// 이미 수락된 세션에는 소급 적용되지 않으며, 이후 수락되는 세션부터 반영됩니다.
     /// </remarks>
     public TimeSpan? SessionSendTimeout { get; set; }
+
+    /// <summary>이후 수락되는 각 세션에 적용할 초당 최대 프레임 수(악성 플러드 방어). null이면 무제한.</summary>
+    public int? SessionMaxFramesPerSecond { get; set; }
 
     private int? _maxConnections;
     public int? MaxConnections
@@ -229,12 +237,18 @@ internal sealed class SocketPipelineListener : IServerListener
             await Parallel.ForEachAsync(
                 idleSessions,
                 new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct },
-                async (session, _) =>
+                async (session, itemCt) =>
                 {
-                    // H1: OnIdleTimeout 예외 시에도 DisposeAsync 보장
+                    // H1: OnIdleTimeout 예외/행(hang) 시에도 DisposeAsync 보장
                     if (OnIdleTimeout != null)
                     {
-                        try { await OnIdleTimeout(session); }
+                        // WaitAsync(시한, 토큰): 사용자 콜백이 행해도 스윕 루프(리스너당 1개, 하드닝 방어)가
+                        // 멈추지 않도록 시한으로 바운드한다. 초과(TimeoutException)/종료(OperationCanceledException) 시
+                        // 통지는 best-effort로 포기하되, 세션은 이미 _activeSessions에서 TryRemove되어 재스윕 대상이
+                        // 아니며 아래 DisposeAsync로 소켓 하드 종료가 반드시 진행된다.
+                        // AsTask(): ValueTask엔 WaitAsync가 없어 Task로 승격(유휴 축출은 드물어 할당 무해).
+                        try { await OnIdleTimeout(session).AsTask().WaitAsync(IdleCallbackTimeout, itemCt); }
+                        catch (TimeoutException) { /* 통지 시한 초과 — 축출은 계속 */ }
                         catch (Exception ex) when (ex is not OperationCanceledException)
                         { /* 콜백 실패 — 세션 정리는 계속 진행 */ }
                     }
@@ -297,7 +311,11 @@ internal sealed class SocketPipelineListener : IServerListener
                 SocketPipelineSession session;
                 try
                 {
-                    session = new SocketPipelineSession(clientSocket) { SendTimeout = SessionSendTimeout };
+                    session = new SocketPipelineSession(clientSocket)
+                    {
+                        SendTimeout = SessionSendTimeout,
+                        MaxFramesPerSecond = SessionMaxFramesPerSecond,
+                    };
                     session.OnReceived = data => OnReceived?.Invoke(session, data) ?? ValueTask.CompletedTask;
                     session.OnReceiveError = ex => OnClientError?.Invoke(session, ex) ?? ValueTask.CompletedTask;
                     session.OnDisconnected = async () =>

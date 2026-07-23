@@ -33,27 +33,31 @@ public sealed class ConsoleStatusReporter
     private static readonly TimeSpan DefaultInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan DefaultHeartbeatInterval = TimeSpan.FromSeconds(60);
 
-    private readonly IServerListener _listener;
+    // IReadOnlyList<IServerListener>: 용량 모드에서 게임 리스너가 P개(멀티포트)로 늘어나므로 전 포트의
+    // ActiveSessionCount/TotalRejectedConnections를 합산해야 콘솔의 players=/rejected가 전역 접속 수가 된다.
+    // (TelemetryPublisher와 동일 합산 정책 — 두 관측 경로가 같은 값을 보이도록 통일, 코드리뷰 Medium.)
+    private readonly IReadOnlyList<IServerListener> _listeners;
     private readonly GameEventSink _sink;
     private readonly TextWriter _output;
     private readonly TimeSpan _interval;
     private readonly TimeSpan _heartbeatInterval;
 
     /// <summary>콘솔 상태 리포터를 생성한다.</summary>
-    /// <param name="listener">접속자 수·거부된 연결 수를 읽어올 게임 리스너(7777).</param>
+    /// <param name="listeners">접속자 수·거부된 연결 수를 읽어올 게임 리스너들(멀티포트 시 P개). 전 포트를 합산한다.</param>
     /// <param name="sink">이벤트 누적 카운터와 마지막 보스 HP%/세대를 스냅샷해올 이벤트 싱크.</param>
     /// <param name="output">출력 대상. 프로덕션에서는 <see cref="Console.Out"/>, 테스트에서는
     /// <see cref="StringWriter"/>를 주입해 실제 콘솔 없이 검증할 수 있다.</param>
     /// <param name="interval">상태 줄 출력 주기. 생략 시 5초.</param>
     /// <param name="heartbeatInterval">활동이 전혀 없는 유휴 구간에서도 "살아있음"을 알리는 최소 출력
     /// 주기. 생략 시 60초.</param>
-    public ConsoleStatusReporter(IServerListener listener, GameEventSink sink, TextWriter output,
+    public ConsoleStatusReporter(IReadOnlyList<IServerListener> listeners, GameEventSink sink, TextWriter output,
         TimeSpan? interval = null, TimeSpan? heartbeatInterval = null)
     {
-        ArgumentNullException.ThrowIfNull(listener);
+        ArgumentNullException.ThrowIfNull(listeners);
+        if (listeners.Count == 0) throw new ArgumentException("최소 하나의 리스너가 필요합니다.", nameof(listeners));
         ArgumentNullException.ThrowIfNull(sink);
         ArgumentNullException.ThrowIfNull(output);
-        _listener = listener;
+        _listeners = listeners;
         _sink = sink;
         _output = output;
         _interval = interval ?? DefaultInterval;
@@ -83,7 +87,14 @@ public sealed class ConsoleStatusReporter
                 var delta = Diff(previous, current);
                 previous = current;
 
-                int connectedCount = _listener.ActiveSessionCount;
+                // 전 포트 합산: 단일 포트면 루프 1회. TelemetryPublisher.PublishLoopAsync와 동일 방식.
+                int connectedCount = 0;
+                long rejectedConnections = 0;
+                for (int i = 0; i < _listeners.Count; i++)
+                {
+                    connectedCount += _listeners[i].ActiveSessionCount;
+                    rejectedConnections += _listeners[i].TotalRejectedConnections;
+                }
                 bool idle = connectedCount == 0 && !HasActivity(delta);
                 var now = DateTime.UtcNow;
 
@@ -95,7 +106,7 @@ public sealed class ConsoleStatusReporter
                     continue;
                 }
 
-                string line = FormatLine(now, connectedCount, _listener.TotalRejectedConnections,
+                string line = FormatLine(now, connectedCount, rejectedConnections,
                     delta, current.LastBossHpPercent, current.LastBossGeneration, idle, _interval);
                 await _output.WriteLineAsync(line);
                 lastPrintedAt = now;

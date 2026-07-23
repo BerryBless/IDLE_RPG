@@ -99,10 +99,20 @@ internal sealed class SocketPipelineSession : ISession
     /// (송신 게이트가 세션당 동시 송신 1건을 보장하므로 안전). 직전 시한이 발화한 직후 송신에서만 드물게 1개를 재생성합니다.</description></item>
     /// <item><description><b>Cancellation 계약:</b> 설정 시 <see cref="SendAsync"/>의 <c>cancellationToken</c>은 송신 게이트 대기를 취소합니다.
     /// 단, 이미 시작된(in-flight) 소켓 쓰기는 caller 토큰이 아니라 이 시한으로 bound됩니다(즉시 끊기지 않고 시한 내로 종료). 시한 초과 시 <see cref="System.Net.Sockets.SocketException"/>(TimedOut).</description></item>
-    /// <item><description><b>Thread Safety:</b> Thread-safe(단순 참조 읽기/쓰기). <see cref="StartReceiving"/> 전후 어느 시점에든 설정 가능합니다.</description></item>
+    /// <item><description><b>Thread Safety:</b> Not thread-safe. <see cref="StartReceiving"/> 전에 설정해야 합니다.
+    /// <see cref="TimeSpan"/>?는 멀티워드 구조체라 런타임 재설정 시 I/O 스레드에서 torn read가 가능하므로 설정 시점을 수신 시작 이전으로 제한합니다.</description></item>
     /// </list>
     /// </remarks>
     public TimeSpan? SendTimeout { get; set; }
+
+    /// <summary>세션당 초당 최대 완전 패킷(프레임) 수. <see langword="null"/>(기본)이면 무제한.
+    /// 초과 시 해당 세션만 정상 종료(악성 프레임 플러드 방어) — 정상 클라(인증 1회 + 주기적 PING)는
+    /// 여유 있게 하회한다. <see cref="StartReceiving"/> 전에 설정해야 한다(수신 루프 전용 필드라 무동기).</summary>
+    public int? MaxFramesPerSecond { get; set; }
+
+    // 프레임 레이트 리밋용 고정 1초 윈도우. ReadPipeAsync(단일 수신 스레드)만 접근하므로 동기화 불필요.
+    private long _frameWindowStartTicks;
+    private int _frameCountInWindow;
 
     public SocketPipelineSession(Socket socket)
     {
@@ -186,7 +196,32 @@ internal sealed class SocketPipelineSession : ISession
                 {
                     // B3: 완전한 패킷이 프레이밍될 때만 진척 시각을 갱신한다(PING 포함). 바이트만 흘리고 패킷을
                     // 완성하지 않는 trickle 공격은 이 값을 갱신하지 못해 유휴 스윕에 정리된다(byte 기준 LastReceivedAt과 구분).
-                    Volatile.Write(ref _lastProgressAtTicks, DateTimeOffset.UtcNow.UtcTicks);
+                    long nowTicks = DateTimeOffset.UtcNow.UtcTicks;
+                    Volatile.Write(ref _lastProgressAtTicks, nowTicks);
+
+                    // 프레임 레이트 리밋(opt-in): 고정 1초 윈도우에서 완전 패킷 수가 상한을 넘으면 이 세션만
+                    // 정상 종료한다. 위 nowTicks를 재사용해 추가 UtcNow 호출이 없다 — 정상 트래픽엔 필드 2개
+                    // 비교/증가뿐(무할당·무동기, 이 루프 단일 스레드 전용). 악성 프레임 플러드를 즉시 끊어
+                    // 재접속 오버헤드를 강제하므로 CPU/GC 부하를 근본 차단한다.
+                    if (MaxFramesPerSecond is int maxFps)
+                    {
+                        if (nowTicks - _frameWindowStartTicks >= TimeSpan.TicksPerSecond)
+                        {
+                            _frameWindowStartTicks = nowTicks;
+                            _frameCountInWindow = 0;
+                        }
+                        if (++_frameCountInWindow > maxFps)
+                        {
+                            var rateError = OnReceiveError;
+                            if (rateError != null)
+                            {
+                                try { await rateError(new InvalidOperationException(
+                                    $"세션 프레임 레이트 초과({_frameCountInWindow} > {maxFps}/s) — 악성 플러드로 간주해 종료")).ConfigureAwait(false); }
+                                catch { /* 통지 실패 무시 — 세션 정리는 계속 */ }
+                            }
+                            return; // finally → OnDisconnected → DisposeAsync로 소켓·루프 정리
+                        }
+                    }
                     try
                     {
                         await DispatchPacketAsync(packet, packetId);
@@ -383,7 +418,13 @@ internal sealed class SocketPipelineSession : ISession
         _socket.Dispose();
         _cts.Dispose();
         Volatile.Write(ref _context, null); // 민감 데이터 잔류 방지 (CWE-212/459) — 사용자 컨텍스트 참조 해제
-        _sendGate.Dispose();
-        _sendTimeoutCts?.Dispose(); // 재사용 송신 시한 CTS 해제(진행 중 송신과의 경합은 _sendGate.Dispose와 동일 저위험 race)
+        // _sendGate·_sendTimeoutCts는 의도적으로 Dispose하지 않는다(다시 넣지 말 것).
+        // 유휴 스윕/Stop() 등 다른 스레드가 DisposeAsync를 호출하는 동안 자동 PONG 회신·앱 SendAsync(브로드캐스트)가
+        // _sendGate.WaitAsync에서 대기 중이면, SemaphoreSlim.Dispose()는 대기자를 깨우지 않아 그 송신 태스크가
+        // 영구 미완료(고아)로 남고 BroadcastAsync 드레인이 프로세스 종료까지 정지한다. Dispose를 생략하면 보유자의
+        // finally { Release() }가 항상 성공해 대기자를 깨우고, 대기자는 파괴된 소켓에서 즉시 실패(fail-fast)로 종료한다.
+        // 이 게이트는 AvailableWaitHandle을 쓰지 않아 해제할 비관리 자원이 없다(GC로 회수). _sendTimeoutCts도 같은 이유 —
+        // 진행 중 보유자가 CancelAfter/.Token 접근 시 ObjectDisposedException을 던지지 않도록 Dispose 생략(매 송신 finally에서
+        // InfiniteTimeSpan으로 무장 해제되어 Timer 미발화).
     }
 }

@@ -28,6 +28,7 @@ public class TelemetryPublisherTests
         public int? MaxConnectionsPerIp { get; set; }
         public long TotalRejectedConnections { get; set; }
         public TimeSpan? SessionSendTimeout { get; set; }
+        public int? SessionMaxFramesPerSecond { get; set; }
         public int ActiveSessionCount { get; set; }
 
         public void Start(int port) => throw new NotSupportedException("테스트에서 사용하지 않음");

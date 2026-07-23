@@ -175,6 +175,26 @@ public interface IServerListener
     TimeSpan? SessionSendTimeout { get; set; }
 
     /// <summary>
+    /// 새로 수락되는 각 세션에 적용할 초당 최대 프레임(완전 패킷) 수입니다. <see langword="null"/>(기본값)이면 무제한.
+    /// </summary>
+    /// <remarks>
+    /// <b>[목적:]</b> 악성 클라이언트가 초당 수만~수십만 개의 (잘못된) 프레임을 쏟아부어 서버 CPU/GC를
+    /// 고갈시키는 플러드를 방어합니다. 상한 초과 시 해당 세션만 정상 종료되어 공격자에게 재접속
+    /// 오버헤드를 강제합니다. 정상 클라이언트(인증 1회 + 주기적 PING/앱 패킷)는 여유 있게 하회하도록
+    /// 값을 잡아야 합니다.
+    /// <br/><br/>
+    /// <b>[적용 범위:]</b> 이미 수락된 세션에는 소급 적용되지 않으며, 설정 이후 수락되는 세션부터 반영됩니다.
+    /// <br/><br/>
+    /// <b>[성능 및 동시성 제약 조건]</b>
+    /// <list type="bullet">
+    /// <item><description><b>Thread Safety:</b> Not thread-safe. <see cref="Start(int)"/> 호출 전에 설정해야 합니다.</description></item>
+    /// <item><description><b>Memory Allocation:</b> Zero-allocation. 세션 수신 루프가 고정 1초 윈도우로 프레임 수만 센다.</description></item>
+    /// <item><description><b>Blocking:</b> Non-blocking.</description></item>
+    /// </list>
+    /// </remarks>
+    int? SessionMaxFramesPerSecond { get; set; }
+
+    /// <summary>
     /// 현재 활성(수신 루프 구동 중) 세션의 수입니다.
     /// </summary>
     /// <remarks>

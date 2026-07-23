@@ -25,6 +25,25 @@ public interface IClientConnection : IAsyncDisposable
     bool IsConnected { get; }
 
     /// <summary>
+    /// 연결 전에 소켓을 바인드할 로컬(소스) 엔드포인트입니다. <see langword="null"/>(기본값)이면 OS가
+    /// 임시 포트를 자동 할당합니다.
+    /// </summary>
+    /// <remarks>
+    /// <b>[용도]</b> 대규모 동시 연결 부하 생성 시, 소스 포트를 명시적으로 지정하고 <c>SO_REUSEADDR</c>로
+    /// 같은 소스 포트를 서로 다른 목적지 포트에 재사용해 4-튜플 공간을 확장한다(단일 소스 IP의 임시
+    /// 포트 풀 상한 ~64k을 목적지 포트 수만큼 곱하는 효과). 지정 시 <see cref="ConnectAsync"/>가 소켓에
+    /// <c>SO_REUSEADDR</c>를 켜고 이 엔드포인트를 바인드한 뒤 연결한다.
+    /// <br/><br/>
+    /// <b>[성능 및 동시성 제약 조건]</b>
+    /// <list type="bullet">
+    /// <item><description><b>Thread Safety:</b> Not thread-safe. <see cref="ConnectAsync"/> 호출 전에 설정해야 합니다.</description></item>
+    /// <item><description><b>Memory Allocation:</b> Zero-allocation.</description></item>
+    /// <item><description><b>Blocking:</b> Non-blocking.</description></item>
+    /// </list>
+    /// </remarks>
+    System.Net.IPEndPoint? LocalEndPoint { get; set; }
+
+    /// <summary>
     /// 자동 하트비트 PING 송신 주기입니다. <see langword="null"/>이면 하트비트를 비활성화합니다(기본값).
     /// </summary>
     /// <remarks>
